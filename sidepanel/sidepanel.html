@@ -9,9 +9,7 @@
 <body>
   <div class="app">
     <header class="app-header">
-      <h1 style="font-family: 'Gill Sans', 'Gill Sans MT', Calibri, 'Trebuchet MS', sans-serif; font-weight: 700;">
-        Sheetz
-      </h1>
+      <img src="../images/logo-horizontal.png" alt="Drag to Sheets" class="app-logo">
       <span class="badge">beta</span>
     </header>
 
@@ -44,6 +42,7 @@
         <button id="url-fetch-btn" class="url-fetch-btn">
           Import
         </button>
+        <p class="url-hint">Only import files from URLs you trust.</p>
       </div>
     </div>
 
@@ -131,11 +130,6 @@
             <span>Normalize header names</span>
           </label>
         </div>
-        <div class="option-divider"></div>
-        <label class="checkbox-label">
-          <input type="checkbox" id="opt-preserve-fmt">
-          <span>Preserve cell formatting <span class="opt-note">(Excel only)</span></span>
-        </label>
       </div>
     </section>
 
@@ -182,6 +176,8 @@
   <script src="cleaner.js"></script>
   <script src="merger.js"></script>
   <script src="google-api.js"></script>
+  <script src="file-handle-store.js"></script>
+  <script src="exporter.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

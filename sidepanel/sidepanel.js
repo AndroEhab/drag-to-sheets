@@ -95,7 +95,7 @@
       const totalBytes = items.reduce((sum, item) => sum + (item?.file?.size || item?.size || 0), 0);
       const fileCount = items.length;
       const excelCount = items.filter((item) => item?.ext === 'xlsx' || item?.ext === 'xls').length;
-      const preserveFormatting = Boolean(options?.preserveFormatting);
+      const preserveFormatting = Boolean(options?.preserveFormatting ?? true);
       const styleHeavy = preserveFormatting && excelCount > 0;
 
       let parseConcurrency = 3;
@@ -192,7 +192,7 @@
       }
     }
 
-    createParsedFileEntry(file, ext, parsed) {
+    createParsedFileEntry(file, ext, parsed, fileHandle) {
       const contentFingerprint = this.computeFingerprint(parsed);
       return {
         file,
@@ -203,10 +203,12 @@
         stats: this.computeParsedStats(parsed),
         identityKey: this.computeFileIdentity(file, ext),
         contentFingerprint,
+        fileHandle: fileHandle || null,
+        handleId: null,
       };
     }
 
-    createLazyFileEntry(file, ext) {
+    createLazyFileEntry(file, ext, fileHandle) {
       return {
         file,
         parsed: null,
@@ -216,7 +218,23 @@
         stats: null,
         identityKey: this.computeFileIdentity(file, ext),
         lazy: true,
+        fileHandle: fileHandle || null,
+        handleId: null,
       };
+    }
+
+    /**
+     * Persist a FileSystemFileHandle for a file entry into IndexedDB.
+     * The handleId is stored on the entry for later retrieval.
+     */
+    async storeFileHandle(entry) {
+      if (!entry?.fileHandle || typeof FileHandleStore === 'undefined') return;
+      try {
+        const id = await FileHandleStore.saveHandle(entry.fileHandle);
+        entry.handleId = id;
+      } catch (err) {
+        this._log('warn', 'Drag to Sheets: failed to store file handle:', err.message);
+      }
     }
 
     computeFileIdentity(file, extOverride) {
@@ -640,6 +658,12 @@
       return window.DRAG_TO_SHEETS_DEBUG_PERF === true;
     }
 
+    _log(level, ...args) {
+      if (!this.isPerfDebugEnabled()) return;
+      const fn = console[level];
+      if (typeof fn === 'function') fn(...args);
+    }
+
     logTiming(label, startTime, details = {}) {
       const durationMs = Math.round((this.now() - startTime) * 10) / 10;
       const message = `Drag to Sheets perf: ${label} (${durationMs} ms)`;
@@ -790,6 +814,8 @@
       this.customMappingOption = document.getElementById('custom-mapping-option');
       this.customMappingList = document.getElementById('custom-mapping-list');
       this.customMappingAddBtn = document.getElementById('custom-mapping-add');
+
+      this.uploading = false;
     }
 
     setupDragDrop() {
@@ -808,23 +834,85 @@
       this.dropZone.addEventListener('dragenter', highlight);
       this.dropZone.addEventListener('dragover', highlight);
       this.dropZone.addEventListener('dragleave', unhighlight);
-      this.dropZone.addEventListener('drop', (e) => {
+      this.dropZone.addEventListener('drop', async (e) => {
         unhighlight(e);
-        this.handleFiles(e.dataTransfer.files);
+        // Capture files synchronously before DataTransfer expires
+        const files = Array.from(e.dataTransfer.files);
+
+        // Kick off all getAsFileSystemHandle() calls synchronously (before any await)
+        // so the DataTransferItems remain valid.
+        const handlePromises = [];
+        if (e.dataTransfer.items) {
+          for (const item of Array.from(e.dataTransfer.items)) {
+            if (item.kind === 'file' && typeof item.getAsFileSystemHandle === 'function') {
+              handlePromises.push(item.getAsFileSystemHandle().catch(() => null));
+            } else {
+              handlePromises.push(Promise.resolve(null));
+            }
+          }
+        }
+
+        // Resolve handles and request readwrite permission while user gesture is active
+        const fileHandleMap = new Map();
+        const handles = await Promise.all(handlePromises);
+        for (let i = 0; i < handles.length && i < files.length; i++) {
+          const handle = handles[i];
+          if (handle && handle.kind === 'file') {
+            try {
+              await handle.requestPermission({ mode: 'readwrite' });
+            } catch (_) { /* permission not granted — handle is still usable for read */ }
+            fileHandleMap.set(files[i].name, handle);
+          }
+        }
+
+        this.handleFiles(files, fileHandleMap);
       });
 
-      // Click to browse
-      this.dropZone.addEventListener('click', () => this.fileInput.click());
+      // Click to browse — use showOpenFilePicker to capture FileSystemFileHandles
+      const openFilePicker = async () => {
+        if (typeof showOpenFilePicker === 'function') {
+          try {
+            const handles = await showOpenFilePicker({
+              multiple: true,
+              types: [{
+                description: 'Spreadsheet files',
+                accept: {
+                  'text/csv': ['.csv'],
+                  'text/tab-separated-values': ['.tsv'],
+                  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+                  'application/vnd.ms-excel': ['.xls'],
+                },
+              }],
+            });
+            const fileHandleMap = new Map();
+            const files = [];
+            for (const handle of handles) {
+              const file = await handle.getFile();
+              try {
+                await handle.requestPermission({ mode: 'readwrite' });
+              } catch (_) { /* best effort */ }
+              fileHandleMap.set(file.name, handle);
+              files.push(file);
+            }
+            if (files.length > 0) this.handleFiles(files, fileHandleMap);
+          } catch (err) {
+            if (err.name !== 'AbortError') this._log('warn', 'File picker error:', err);
+          }
+        } else {
+          this.fileInput.click();
+        }
+      };
+      this.dropZone.addEventListener('click', openFilePicker);
       this.dropZone.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          this.fileInput.click();
+          openFilePicker();
         }
       });
       this.fileInput.addEventListener('change', () => {
         if (this.fileInput.files.length > 0) {
           this.handleFiles(this.fileInput.files);
-          this.fileInput.value = ''; // Reset for re-selection
+          this.fileInput.value = '';
         }
       });
 
@@ -920,7 +1008,7 @@
 
     checkExcelSupport() {
       if (!Parser.isExcelSupported()) {
-        console.info(
+        this._log('info',
           'Drag to Sheets: SheetJS not loaded — .xlsx/.xls support disabled. CSV/TSV still work.'
         );
       }
@@ -928,9 +1016,29 @@
 
     // ---- URL Import ----
 
-    toggleUrlBar(forceOpen) {
+    async requestUrlImportPermission() {
+      try {
+        const granted = await chrome.permissions.request({
+          origins: ['https://*/*', 'http://*/*'],
+        });
+        return granted;
+      } catch {
+        return false;
+      }
+    }
+
+    async toggleUrlBar(forceOpen) {
       const isCurrentlyOpen = this.urlToggle.getAttribute('aria-expanded') === 'true';
       const open = forceOpen !== undefined ? forceOpen : !isCurrentlyOpen;
+
+      if (open && !isCurrentlyOpen) {
+        const hasPermission = await this.requestUrlImportPermission();
+        if (!hasPermission) {
+          this.setStatus('URL import requires permission to access external websites', 'warning');
+          return;
+        }
+      }
+
       this.urlBar.classList.toggle('hidden', !open);
       this.urlToggle.setAttribute('aria-expanded', String(open));
       if (open) {
@@ -943,7 +1051,6 @@
     async importFromUrl() {
       const raw = this.urlInput.value.trim();
 
-      // Basic URL validation — must be http/https
       let url;
       try {
         url = new URL(raw);
@@ -972,7 +1079,6 @@
           throw new Error(`Server returned ${response.status} ${response.statusText}`);
         }
 
-        // Determine filename from URL, Content-Disposition header, or fallback
         const disposition = response.headers.get('content-disposition') || '';
         const contentType = response.headers.get('content-type') || '';
         const fileName = this.resolveFileName(raw, disposition, contentType);
@@ -990,10 +1096,8 @@
         const blob = await response.blob();
         const file = new File([blob], fileName, { type: blob.type });
 
-        // Reuse existing file handling pipeline
         await this.handleFiles([file]);
 
-        // Clear input and collapse bar on success
         this.urlInput.value = '';
         this.toggleUrlBar(false);
       } catch (err) {
@@ -1098,13 +1202,20 @@
 
         persistPromise
           .then(() => chrome.storage.session.set({ files: [], sessionSummary: summary }))
-          .catch((err) => console.warn('Drag to Sheets: session save failed:', err.message));
+          .catch((err) => this._log('warn', 'Drag to Sheets: session save failed:', err.message));
         return;
       }
 
       chrome.storage.session
         .set({ files: serializedFiles, sessionSummary: null })
-        .catch((err) => console.warn('Drag to Sheets: session save failed:', err.message));
+        .catch(async (err) => {
+          this._log('warn', 'Drag to Sheets: session save failed:', err.message);
+          if (this.canUseIndexedDb()) {
+            try {
+              await this.saveFilesToIndexedDb(indexedDbFiles);
+            } catch (_) { /* best effort */ }
+          }
+        });
 
       void this.clearFilesFromIndexedDb().catch(() => {});
     }
@@ -1120,7 +1231,7 @@
 
       chrome.storage.local
         .set({ prefs })
-        .catch((err) => console.warn('Drag to Sheets: prefs save failed:', err.message));
+        .catch((err) => this._log('warn', 'Drag to Sheets: prefs save failed:', err.message));
     }
 
     saveSession() {
@@ -1179,7 +1290,6 @@
             removeDuplicates: 'opt-duplicates',
             fixNumbers: 'opt-numbers',
             normalizeHeaders: 'opt-headers',
-            preserveFormatting: 'opt-preserve-fmt',
           };
           const opts = prefs.cleaningOptions || {};
           for (const [key, id] of Object.entries(optMap)) {
@@ -1213,7 +1323,7 @@
           }
         }
       } catch (err) {
-        console.warn('Drag to Sheets: session restore failed:', err.message);
+        this._log('warn', 'Drag to Sheets: session restore failed:', err.message);
       }
 
       this.renderFileList();
@@ -1231,10 +1341,11 @@
 
     // ---- File Handling ----
 
-    async handleFiles(fileList) {
+    async handleFiles(fileList, fileHandleMap) {
       const parseStart = this.now();
       const dropped = Array.from(fileList);
       const options = this.getCleaningOptions();
+      const handleMap = fileHandleMap || new Map();
       const acceptedFiles = [];
 
       for (const file of dropped) {
@@ -1253,7 +1364,7 @@
           continue;
         }
 
-        acceptedFiles.push({ file, ext });
+        acceptedFiles.push({ file, ext, fileHandle: handleMap.get(file.name) || null });
       }
 
       if (acceptedFiles.length === 0) {
@@ -1269,14 +1380,15 @@
         let added = 0;
         let skippedDuplicates = 0;
 
-        for (const { file, ext } of acceptedFiles) {
+        for (const { file, ext, fileHandle } of acceptedFiles) {
           const identityKey = this.computeFileIdentity(file, ext);
           if (this.fileIdentityKeys.has(identityKey)) {
             skippedDuplicates++;
             continue;
           }
 
-          const entry = this.createLazyFileEntry(file, ext);
+          const entry = this.createLazyFileEntry(file, ext, fileHandle);
+          await this.storeFileHandle(entry);
           this.fileIdentityKeys.add(identityKey);
           this.files.push(entry);
           added++;
@@ -1366,7 +1478,9 @@
 
         this.fileIdentityKeys.add(identityKey);
         this.fileFingerprints.add(fingerprint);
-        this.files.push(this.createParsedFileEntry(result.file, result.ext, result.parsed));
+        const entry = this.createParsedFileEntry(result.file, result.ext, result.parsed, handleMap.get(result.file.name));
+        await this.storeFileHandle(entry);
+        this.files.push(entry);
         added++;
       }
 
@@ -1506,6 +1620,18 @@
         const actions = document.createElement('div');
         actions.className = 'file-actions';
 
+        const openBtn = document.createElement('button');
+        openBtn.className = 'file-action-btn open-file-btn';
+        openBtn.innerHTML = this.iconMarkup('square-arrow-out-up-right');
+        openBtn.title = 'Open this file in Sheets';
+        openBtn.setAttribute('aria-label', `Open ${item.name} in Sheets`);
+        openBtn.disabled = this.uploading;
+        openBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.uploadSingleFromList(index);
+        });
+        actions.appendChild(openBtn);
+
         if (this.files.length > 1) {
           const upBtn = document.createElement('button');
           upBtn.className = 'file-action-btn reorder-btn';
@@ -1615,7 +1741,7 @@
         duplicateMode: document.querySelector('input[name="dup-mode"]:checked')?.value ?? 'keep-first',
         fixNumbers: document.getElementById('opt-numbers').checked,
         normalizeHeaders: document.getElementById('opt-headers').checked,
-        preserveFormatting: document.getElementById('opt-preserve-fmt').checked,
+        preserveFormatting: true,
       };
     }
 
@@ -1684,8 +1810,16 @@
 
     renderPreviewNotice(message, detail = '') {
       this.previewStats.textContent = detail;
-      this.previewTable.innerHTML = `<div>${this.escapeHtml(message)}</div>`;
+      this.previewTable.innerHTML = `<div class="preview-notice">${this.escapeHtml(message)}</div>`;
       this.previewPanel.classList.remove('hidden');
+    }
+
+    hasPreviewData(data) {
+      return Array.isArray(data) && data.length > 0;
+    }
+
+    renderNoDataPreview(detail = '') {
+      this.renderPreviewNotice('No data found in the imported file(s).', detail);
     }
 
     /** Auto-called whenever files, mode, or options change. */
@@ -1729,7 +1863,7 @@
             }
 
             const sheet = samplePreview.merged.sheets[0];
-            if (sheet && sheet.data.length > 0) {
+            if (sheet && this.hasPreviewData(sheet.data)) {
               this.renderPreviewTable(sheet.data, `Merged (${this.files.length} files)`, samplePreview.summary);
               this.previewPanel.classList.remove('hidden');
               this.logTiming('refresh preview sample', previewStart, {
@@ -1739,7 +1873,14 @@
                 cols: samplePreview.summary.totalCols,
               });
             } else {
-              this.hidePreview();
+              this.renderNoDataPreview();
+              this.logTiming('refresh preview sample', previewStart, {
+                mode,
+                files: this.files.length,
+                rows: 0,
+                cols: 0,
+                visible: true,
+              });
             }
           } catch (error) {
             if (!this.isPreviewTaskCurrent(previewTaskId)) return;
@@ -1750,7 +1891,7 @@
         }
 
         try {
-          await this.ensureEntriesParsed(this.files, { preserveFormatting: false }, 'merge preview');
+          await this.ensureEntriesParsed(this.files, { preserveFormatting: true }, 'merge preview');
         } catch (error) {
           if (!this.isPreviewTaskCurrent(previewTaskId)) return;
           this.renderPreviewNotice(error.message);
@@ -1786,7 +1927,7 @@
         const merged = await this.getMergedProcessedData(options);
         if (!this.isPreviewTaskCurrent(previewTaskId)) return;
         const sheet = merged.sheets[0];
-        if (sheet && sheet.data.length > 0) {
+        if (sheet && this.hasPreviewData(sheet.data)) {
           this.renderPreviewTable(sheet.data, `Merged (${this.files.length} files)`);
           this.previewPanel.classList.remove('hidden');
           this.logTiming('refresh preview', previewStart, {
@@ -1797,11 +1938,13 @@
             visible: true,
           });
         } else {
-          this.hidePreview();
+          this.renderNoDataPreview();
           this.logTiming('refresh preview', previewStart, {
             mode,
             files: this.files.length,
-            visible: false,
+            rows: 0,
+            cols: 0,
+            visible: true,
           });
         }
       } else {
@@ -1821,13 +1964,17 @@
           try {
             const samplePreview = await this.getResponsiveSeparatePreview(item);
             if (!this.isPreviewTaskCurrent(previewTaskId)) return;
-            this.renderPreviewTable(samplePreview.data, item.name, samplePreview.summary);
-            this.previewPanel.classList.remove('hidden');
+            if (this.hasPreviewData(samplePreview.data)) {
+              this.renderPreviewTable(samplePreview.data, item.name, samplePreview.summary);
+              this.previewPanel.classList.remove('hidden');
+            } else {
+              this.renderNoDataPreview();
+            }
             this.logTiming('refresh preview sample', previewStart, {
               mode,
               file: item.name,
-              rows: samplePreview.summary.totalRows,
-              cols: samplePreview.summary.totalCols,
+              rows: this.hasPreviewData(samplePreview.data) ? samplePreview.summary.totalRows : 0,
+              cols: this.hasPreviewData(samplePreview.data) ? samplePreview.summary.totalCols : 0,
               visible: true,
             });
           } catch (error) {
@@ -1842,7 +1989,7 @@
           return;
         }
         try {
-          await this.ensureParsedEntry(item, { preserveFormatting: false }, 'preview');
+          await this.ensureParsedEntry(item, { preserveFormatting: true }, 'preview');
         } catch (error) {
           if (!this.isPreviewTaskCurrent(previewTaskId)) return;
           this.renderPreviewNotice(error.message);
@@ -1856,13 +2003,17 @@
         if (!this.isPreviewTaskCurrent(previewTaskId)) return;
         const cleaned = await this.getCleanedSheetData(isNaN(idx) ? 0 : idx, 0, options);
         if (!this.isPreviewTaskCurrent(previewTaskId)) return;
-        this.renderPreviewTable(cleaned, item.name);
-        this.previewPanel.classList.remove('hidden');
+        if (this.hasPreviewData(cleaned)) {
+          this.renderPreviewTable(cleaned, item.name);
+          this.previewPanel.classList.remove('hidden');
+        } else {
+          this.renderNoDataPreview();
+        }
         this.logTiming('refresh preview', previewStart, {
           mode,
           file: item.name,
-          rows: cleaned.length,
-          cols: cleaned[0]?.length || 0,
+          rows: this.hasPreviewData(cleaned) ? cleaned.length : 0,
+          cols: this.hasPreviewData(cleaned) ? (cleaned[0]?.length || 0) : 0,
           visible: true,
         });
       }
@@ -2338,6 +2489,11 @@
     }
 
     renderPreviewTable(data, label = '', summary = {}) {
+      if (!this.hasPreviewData(data)) {
+        this.renderNoDataPreview();
+        return;
+      }
+
       const MAX_ROWS = 50;
       const MAX_COLS = 15;
 
@@ -2434,9 +2590,11 @@
     // ---- Upload ----
 
     async handleUpload() {
-      if (this.files.length === 0) return;
+      if (this.files.length === 0 || this.uploading) return;
 
       const uploadStart = this.now();
+      this.uploading = true;
+      this.renderFileList();
       this.uploadBtn.disabled = true;
       this.showProgress(0);
 
@@ -2452,7 +2610,7 @@
         let releasedParsedEntries = false;
 
         if (mode === 'merge' && this.files.length > 1) {
-          await this.ensureEntriesParsed(this.files, { preserveFormatting: false }, 'merge upload');
+          await this.ensureEntriesParsed(this.files, { preserveFormatting: true }, 'merge upload');
           this.showProgress(5);
 
           // Merge mode
@@ -2466,7 +2624,7 @@
             (f) => (f.ext === 'xlsx' || f.ext === 'xls') && !f.file
           );
 
-          if (options.preserveFormatting && excelWithRaw.length > 0) {
+          if (excelWithRaw.length > 0) {
             await this.ensureFormattingData(excelWithRaw);
 
             // Styles are already extracted during parsing — no API calls needed
@@ -2568,7 +2726,7 @@
             }
 
             results.push(result);
-          } else if (options.preserveFormatting && hasSessionExcel && excelWithRaw.length === 0) {
+          } else if (hasSessionExcel) {
             // All Excel files are session-restored — no raw data available
             this.setStatus(
               'Re-add your files to preserve formatting (session-restored files lose raw data)',
@@ -2576,7 +2734,7 @@
             );
             return;
           } else {
-            // No formatting preservation — merge and clean locally
+            // No Excel files in the merge — process locally
             this.setStatus('Processing and merging data…', 'loading');
             this.showProgress(15);
             const processed = await this.getProcessedData();
@@ -2591,51 +2749,20 @@
         } else {
           // Separate mode: one spreadsheet per file
           for (let i = 0; i < this.files.length; i++) {
-            const item = this.files[i];
-            const title = item.name.replace(/\.[^.]+$/, '') || `Sheet ${i + 1}`;
-            const useNativeImport = this.shouldUseNativeDriveImport(item);
             const fileBase = (i / this.files.length) * 100;
             const fileSlice = 100 / this.files.length;
-
-            this.setStatus(`Creating "${title}" in Google Sheets…`, 'loading');
+            this.setStatus(`Creating "${this.files[i].name.replace(/\.[^.]+$/, '') || `Sheet ${i + 1}`}" in Google Sheets…`, 'loading');
             this.showProgress(fileBase);
 
-            if (useNativeImport) {
-              // Path 1: Upload raw file to Drive — Google handles conversion/import natively.
-              const fileContext = { responseCache: new Map(), tightGrid: shouldTightenGrid };
-              this.showProgress(fileBase + fileSlice * 0.3);
-              const result = await GoogleAPI.uploadFileToDrive(item.file, title, fileContext);
-              if (hasCleaning) {
-                this.setStatus(`Cleaning "${title}"…`, 'loading');
-                this.showProgress(fileBase + fileSlice * 0.7);
-                await GoogleAPI.cleanUploadedSheet(result.id, options, fileContext);
-              }
-              results.push(result);
-              releasedParsedEntries = this.shouldReleaseParsedAfterUpload(item)
-                ? this.releaseParsedEntry(item) || releasedParsedEntries
-                : releasedParsedEntries;
-            } else {
-              // Path 2: Parse locally, clean, create from data
-              this.showProgress(fileBase + fileSlice * 0.1);
-              await this.ensureParsedEntry(item, { preserveFormatting: false }, 'upload');
-              this.showProgress(fileBase + fileSlice * 0.3);
-              const sheetsData = [];
-              for (let sheetIndex = 0; sheetIndex < item.parsed.sheets.length; sheetIndex++) {
-                const sheet = item.parsed.sheets[sheetIndex];
-                sheetsData.push({
-                  name: sheet.name,
-                  data: await this.getCleanedSheetData(i, sheetIndex, options),
-                });
-              }
-              this.showProgress(fileBase + fileSlice * 0.5);
-              const fileContext = { responseCache: new Map(), tightGrid: shouldTightenGrid };
-              const result = await GoogleAPI.createSpreadsheet(title, sheetsData, fileContext);
-              results.push(result);
-              releasedParsedEntries = this.shouldReleaseParsedAfterUpload(item)
-                ? this.releaseParsedEntry(item) || releasedParsedEntries
-                : releasedParsedEntries;
-            }
-
+            const { result, released } = await this.uploadOneFile(this.files[i], i, {
+              options,
+              hasCleaning,
+              shouldTightenGrid,
+              onProgress: (frac) => this.showProgress(fileBase + fileSlice * frac),
+              onStatus: (msg) => this.setStatus(msg, 'loading'),
+            });
+            results.push(result);
+            releasedParsedEntries = released || releasedParsedEntries;
             this.showProgress(fileBase + fileSlice);
           }
         }
@@ -2661,16 +2788,128 @@
           this.saveFilesSession();
         }
       } catch (err) {
-        console.error('Upload failed:', err);
+        this._log('error', 'Upload failed:', err);
         this.logTiming('handle upload failed', uploadStart, {
           files: this.files.length,
           error: err.message,
         });
         this.setStatus(`Upload failed: ${err.message}`, 'error');
       } finally {
+        this.uploading = false;
+        this.renderFileList();
         this.uploadBtn.disabled = this.files.length === 0;
         this.hideProgress();
       }
+    }
+
+    /**
+     * Upload a single file from the list, independent of the bulk upload flow.
+     * Uses the current cleaning options but always creates a separate spreadsheet
+     * for the file (merge mode is a bulk-only concept).
+     */
+    async uploadSingleFromList(index) {
+      if (this.uploading) return;
+      if (index < 0 || index >= this.files.length) return;
+      const item = this.files[index];
+      if (!item) return;
+
+      const uploadStart = this.now();
+      this.uploading = true;
+      this.renderFileList();
+      this.uploadBtn.disabled = true;
+      this.showProgress(0);
+      let releasedParsedEntries = false;
+
+      try {
+        const options = this.getCleaningOptions();
+        const shouldTightenGrid = options.removeEmptyRows || options.removeEmptyColumns;
+        const hasCleaning =
+          options.trim || options.removeEmptyRows || options.removeEmptyColumns ||
+          options.removeDuplicates || options.fixNumbers || options.normalizeHeaders;
+        const title = item.name.replace(/\.[^.]+$/, '') || `Sheet ${index + 1}`;
+
+        this.setStatus(`Creating "${title}" in Google Sheets…`, 'loading');
+
+        const { result, released } = await this.uploadOneFile(item, index, {
+          options,
+          hasCleaning,
+          shouldTightenGrid,
+          onProgress: (frac) => this.showProgress(frac * 100),
+          onStatus: (msg) => this.setStatus(msg, 'loading'),
+        });
+        releasedParsedEntries = released;
+
+        await this.openResultTabs([result]);
+
+        this.showProgress(100);
+        this.setStatus('Spreadsheet created and opened!', 'success');
+        this.logTiming('single file upload', uploadStart, {
+          file: item.name,
+          preserveFormatting: options.preserveFormatting,
+          hasCleaning,
+        });
+      } catch (err) {
+        this._log('error', 'Single file upload failed:', err);
+        this.logTiming('single file upload failed', uploadStart, {
+          file: item?.name,
+          error: err.message,
+        });
+        this.setStatus(`Upload failed: ${err.message}`, 'error');
+      } finally {
+        this.uploading = false;
+        if (releasedParsedEntries) this.renderFileList();
+        this.renderFileList();
+        this.uploadBtn.disabled = this.files.length === 0;
+        this.hideProgress();
+      }
+    }
+
+    /**
+     * Internal helper that creates a single spreadsheet for one file.
+     * Shared by the bulk separate-mode path and the per-file "Open" action.
+     * Returns `{ result, released }` where `released` indicates whether the
+     * parsed entry was freed after upload (so the caller can re-render / persist).
+     */
+    async uploadOneFile(item, index, { options, hasCleaning, shouldTightenGrid, onProgress, onStatus } = {}) {
+      const title = item.name.replace(/\.[^.]+$/, '') || `Sheet ${index + 1}`;
+      const useNativeImport = this.shouldUseNativeDriveImport(item);
+      let released = false;
+
+      if (useNativeImport) {
+        // Path 1: Upload raw file to Drive — Google handles conversion/import natively.
+        const fileContext = { responseCache: new Map(), tightGrid: shouldTightenGrid };
+        onProgress?.(0.3);
+        const result = await GoogleAPI.uploadFileToDrive(item.file, title, fileContext);
+        if (hasCleaning) {
+          onStatus?.(`Cleaning "${title}"…`);
+          onProgress?.(0.7);
+          await GoogleAPI.cleanUploadedSheet(result.id, options, fileContext);
+        }
+        if (this.shouldReleaseParsedAfterUpload(item)) {
+          released = !!this.releaseParsedEntry(item);
+        }
+        return { result, released };
+      }
+
+      // Path 2: Parse locally, clean, create from data
+      onProgress?.(0.1);
+      await this.ensureParsedEntry(item, { preserveFormatting: true }, 'upload');
+      onProgress?.(0.3);
+      const sheetsData = [];
+      for (let sheetIndex = 0; sheetIndex < item.parsed.sheets.length; sheetIndex++) {
+        const sheet = item.parsed.sheets[sheetIndex];
+        sheetsData.push({
+          name: sheet.name,
+          data: await this.getCleanedSheetData(index, sheetIndex, options),
+        });
+      }
+      onProgress?.(0.5);
+      const fileContext = { responseCache: new Map(), tightGrid: shouldTightenGrid };
+      const result = await GoogleAPI.createSpreadsheet(title, sheetsData, fileContext);
+      if (this.shouldReleaseParsedAfterUpload(item)) {
+        released = !!this.releaseParsedEntry(item);
+      }
+      return { result, released };
     }
 
     // ---- Progress & Status ----

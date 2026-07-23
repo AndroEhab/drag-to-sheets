@@ -46,7 +46,18 @@ const GoogleAPI = (() => {
 
     const tokenPromise = chrome.identity
       .getAuthToken({ interactive: true })
-      .then((result) => result.token);
+      .then((result) => {
+        if (!result || !result.token) {
+          throw new Error('Google sign-in was cancelled. Please try again and grant access to continue.');
+        }
+        return result.token;
+      })
+      .catch((err) => {
+        if (err.message?.includes('cancel') || err.message?.includes('denied')) {
+          throw new Error('Google sign-in was cancelled. Please grant access to use Google Sheets.');
+        }
+        throw err;
+      });
 
     if (context) {
       context.tokenPromise = tokenPromise;
@@ -153,6 +164,14 @@ const GoogleAPI = (() => {
       n = Math.floor(n / 26);
     }
     return s;
+  }
+
+  function normalizeHeaderTitleCase(value) {
+    return String(value ?? '')
+      .trim()
+      .replace(/\s+/g, ' ')
+      .toLowerCase()
+      .replace(/\b\w/g, (ch) => ch.toUpperCase());
   }
 
   function countRangeCells(range) {
@@ -501,10 +520,7 @@ const GoogleAPI = (() => {
             }
 
             if (options.normalizeHeaders && r === 0) {
-              const normalized = val
-                .toLowerCase()
-                .replace(/[^a-z0-9]+/g, '_')
-                .replace(/^_|_$/g, '');
+              const normalized = normalizeHeaderTitleCase(val);
               if (normalized !== val && normalized.length > 0) {
                 val = normalized;
                 changed = true;
@@ -645,9 +661,7 @@ const GoogleAPI = (() => {
     }
 
     if (requests.length > 0) {
-      await sendBatchUpdateRequests(spreadsheetId, requests, context).catch((err) =>
-        console.warn('Drag to Sheets: post-upload formatting failed:', err.message)
-      );
+      await sendBatchUpdateRequests(spreadsheetId, requests, context).catch(() => {});
     }
   }
 
@@ -734,9 +748,7 @@ const GoogleAPI = (() => {
     }
 
     if (formatRequests.length > 0) {
-      await sendBatchUpdateRequests(spreadsheetId, formatRequests, context).catch((err) =>
-        console.warn('Drag to Sheets: formatting batchUpdate failed:', err.message)
-      );
+      await sendBatchUpdateRequests(spreadsheetId, formatRequests, context).catch(() => {});
     }
 
     if (context) {
@@ -820,6 +832,121 @@ const GoogleAPI = (() => {
     }
 
     return null;
+  }
+
+  /**
+   * Convert a Google Sheets userEnteredFormat object to a SheetJS cell style.
+   * Inverse of sheetJsToSheetsFormat — used when saving the current sheet
+   * back to an XLSX file so that the styles survive a re-import.
+   * Returns null when there is nothing to apply.
+   */
+  function sheetsFormatToSheetJs(fmt) {
+    if (!fmt || typeof fmt !== 'object') return null;
+    const style = {};
+    let hasProps = false;
+
+    // Background color
+    const bgHex = rgbToHex(fmt.backgroundColor);
+    if (bgHex) {
+      const colorObj = { rgb: bgHex };
+      style.fgColor = colorObj;
+      style.fill = { patternType: 'solid', fgColor: colorObj };
+      hasProps = true;
+    }
+
+    // Text format
+    const tf = fmt.textFormat;
+    if (tf && typeof tf === 'object') {
+      const font = {};
+      let hasFontProps = false;
+      if (tf.bold) { font.bold = true; hasFontProps = true; }
+      if (tf.italic) { font.italic = true; hasFontProps = true; }
+      if (tf.underline) { font.underline = true; hasFontProps = true; }
+      if (tf.strikethrough) { font.strike = true; hasFontProps = true; }
+      if (typeof tf.fontSize === 'number' && tf.fontSize > 0) {
+        font.sz = tf.fontSize;
+        hasFontProps = true;
+      }
+      if (tf.fontFamily) { font.name = tf.fontFamily; hasFontProps = true; }
+      const textHex = rgbToHex(tf.foregroundColor);
+      if (textHex) {
+        font.color = { rgb: textHex };
+        hasFontProps = true;
+      }
+      if (hasFontProps) {
+        style.font = font;
+        hasProps = true;
+      }
+    }
+
+    // Alignment
+    const hMap = { LEFT: 'left', CENTER: 'center', RIGHT: 'right' };
+    const vMap = { TOP: 'top', MIDDLE: 'center', BOTTOM: 'bottom' };
+    let alignment = null;
+    if (fmt.horizontalAlignment && hMap[fmt.horizontalAlignment]) {
+      alignment = alignment || {};
+      alignment.horizontal = hMap[fmt.horizontalAlignment];
+    }
+    if (fmt.verticalAlignment && vMap[fmt.verticalAlignment]) {
+      alignment = alignment || {};
+      alignment.vertical = vMap[fmt.verticalAlignment];
+    }
+    if (fmt.wrapStrategy === 'WRAP' || fmt.wrapStrategy === 'WRAP_AND_CLIP') {
+      alignment = alignment || {};
+      alignment.wrapText = true;
+    }
+    if (alignment) {
+      style.alignment = alignment;
+      hasProps = true;
+    }
+
+    // Borders
+    if (fmt.borders && typeof fmt.borders === 'object') {
+      const bStyleMap = {
+        SOLID: 'thin', SOLID_MEDIUM: 'medium', SOLID_THICK: 'thick',
+        DASHED: 'dashed', DOTTED: 'dotted', DOUBLE: 'double',
+      };
+      const borders = {};
+      let hasBorder = false;
+      for (const side of ['top', 'bottom', 'left', 'right']) {
+        const b = fmt.borders[side];
+        if (b && bStyleMap[b.style]) {
+          const entry = { style: bStyleMap[b.style] };
+          const bHex = rgbToHex(b.color);
+          if (bHex) entry.color = { rgb: bHex };
+          borders[side] = entry;
+          hasBorder = true;
+        }
+      }
+      if (hasBorder) {
+        style.border = borders;
+        hasProps = true;
+      }
+    }
+
+    // Number format
+    if (fmt.numberFormat && typeof fmt.numberFormat === 'object') {
+      const pattern = fmt.numberFormat.pattern;
+      if (pattern && pattern !== 'General' && pattern !== 'GENERAL') {
+        style.numFmt = pattern;
+        hasProps = true;
+      }
+    }
+
+    return hasProps ? style : null;
+  }
+
+  /**
+   * Convert a 2D grid of Google Sheets userEnteredFormat objects into a 2D
+   * grid of SheetJS cell styles (the inverse direction of the SheetJS-side
+   * styles, matching the shape produced by Parser.extractSheetStyles).
+   * Returns null when the grid is missing or has no cells.
+   */
+  function sheetsFormatGridToSheetJs(formatGrid) {
+    if (!Array.isArray(formatGrid) || formatGrid.length === 0) return null;
+    return formatGrid.map((row) =>
+      Array.isArray(row) ? row.map((fmt) => sheetsFormatToSheetJs(fmt)) : []
+    );
   }
 
   /**
@@ -949,6 +1076,8 @@ const GoogleAPI = (() => {
     formatUploadedSheet,
     createSpreadsheet,
     sheetJsToSheetsFormat,
+    sheetsFormatToSheetJs,
+    sheetsFormatGridToSheetJs,
     applyFormatting,
   };
 })();

@@ -380,6 +380,15 @@ describe('Cleaner', () => {
       expect(result[1]).toEqual(['Alice', 'Smith']);
     });
 
+    test('normalizes uppercase and mixed-case headers to title case', () => {
+      const data = [
+        ['FIRST NAME', 'eMAIL ADDRESS'],
+        ['Alice', 'alice@example.com'],
+      ];
+      const result = Cleaner.normalizeHeaders(data);
+      expect(result[0]).toEqual(['First Name', 'Email Address']);
+    });
+
     test('collapses multiple spaces', () => {
       const data = [
         ['first   name', 'date    of   birth'],

@@ -22,6 +22,7 @@ global.chrome = {
     getURL: jest.fn((path) => path),
     onMessage: {
       addListener: jest.fn(),
+      removeListener: jest.fn(),
     },
   },
   identity: {
@@ -40,6 +41,9 @@ global.chrome = {
   },
   tabs: {
     create: jest.fn().mockResolvedValue({}),
+  },
+  permissions: {
+    request: jest.fn().mockResolvedValue(true),
   },
 };
 
