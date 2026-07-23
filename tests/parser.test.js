@@ -314,7 +314,7 @@ describe('Parser', () => {
 
       expect(global.XLSX.read).toHaveBeenCalledWith(
         expect.any(ArrayBuffer),
-        expect.objectContaining({ type: 'array', cellStyles: false })
+        expect.objectContaining({ type: 'array', cellStyles: true, bookFiles: true })
       );
       expect(result.sheets).toHaveLength(1);
       expect(result.sheets[0].name).toBe('Sheet1');
@@ -353,16 +353,8 @@ describe('Parser', () => {
       expect(result.sheets[0].data[1]).toEqual(['Alice', '30']);
     });
 
-    test('does not extract cell styles unless requested', async () => {
-      const result = await Parser.parse(makeExcelFile('plain.xlsx'));
-
-      expect(result.sheets[0].styles).toBeUndefined();
-    });
-
-    test('extracts cell styles when formatting preservation is requested', async () => {
-      const result = await Parser.parse(makeExcelFile('styled.xlsx'), {
-        preserveFormatting: true,
-      });
+    test('always extracts cell styles for excel files', async () => {
+      const result = await Parser.parse(makeExcelFile('styled.xlsx'));
 
       expect(global.XLSX.read).toHaveBeenCalledWith(
         expect.any(ArrayBuffer),
@@ -415,9 +407,7 @@ describe('Parser', () => {
         },
       });
 
-      const result = await Parser.parse(makeExcelFile('styled.xlsx'), {
-        preserveFormatting: true,
-      });
+      const result = await Parser.parse(makeExcelFile('styled.xlsx'));
 
       // B1 (s=1): bold font + yellow background
       const b1Style = result.sheets[0].styles[0][1];

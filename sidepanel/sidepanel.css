@@ -70,6 +70,12 @@ body {
   gap: 6px;
 }
 
+.app-logo {
+  height: 56px;
+  width: auto;
+  object-fit: contain;
+}
+
 .logo {
   font-size: 18px;
 }
@@ -317,6 +323,16 @@ body {
 .remove-btn:focus-visible:not(:disabled) {
   background: var(--error-bg);
   color: var(--error);
+}
+
+.open-file-btn {
+  color: var(--primary);
+}
+
+.open-file-btn:hover:not(:disabled),
+.open-file-btn:focus-visible:not(:disabled) {
+  background: var(--primary-light);
+  color: var(--primary);
 }
 
 /* ---- Options Panel ---- */
@@ -694,6 +710,13 @@ body {
   max-height: 300px;
 }
 
+.preview-notice {
+  padding: 16px 12px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 .preview-table-wrapper table {
   width: auto;
   min-width: 100%;
@@ -833,6 +856,13 @@ body {
 .url-fetch-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.url-hint {
+  font-size: 11px;
+  color: var(--text-secondary, #5f6368);
+  margin: 4px 0 0 0;
+  padding: 0 2px;
 }
 
 /* ---- Utility ---- */

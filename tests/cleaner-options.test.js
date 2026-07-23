@@ -599,9 +599,7 @@ describe('Cleaning Option: Normalize Header Names', () => {
   test('converts UPPERCASE headers to Title Case', () => {
     const data = [['FIRST NAME', 'AGE'], ['Alice', '30']];
     const result = Cleaner.apply(data, opts);
-    // \b\w matches word boundaries; FIRST NAME → FIRST NAME with F, N capitalized
-    // The rest stays as-is since \w only capitalizes first char of each word
-    expect(result[0][0]).toMatch(/^F/);
+    expect(result[0]).toEqual(['First Name', 'Age']);
   });
 
   test('collapses multiple spaces in headers', () => {

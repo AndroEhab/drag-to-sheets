@@ -262,6 +262,228 @@ describe('GoogleAPI', () => {
   });
 
   // ================================================================
+  //  sheetsFormatToSheetJs (inverse direction — used by save flow)
+  // ================================================================
+
+  describe('sheetsFormatToSheetJs', () => {
+    test('returns null for null input', () => {
+      expect(GoogleAPI.sheetsFormatToSheetJs(null)).toBeNull();
+    });
+
+    test('returns null for undefined input', () => {
+      expect(GoogleAPI.sheetsFormatToSheetJs(undefined)).toBeNull();
+    });
+
+    test('returns null for non-object input', () => {
+      expect(GoogleAPI.sheetsFormatToSheetJs('string')).toBeNull();
+      expect(GoogleAPI.sheetsFormatToSheetJs(42)).toBeNull();
+    });
+
+    test('returns null for empty format object', () => {
+      expect(GoogleAPI.sheetsFormatToSheetJs({})).toBeNull();
+    });
+
+    test('converts backgroundColor to fgColor + fill', () => {
+      const result = GoogleAPI.sheetsFormatToSheetJs({
+        backgroundColor: { red: 1, green: 0, blue: 0 },
+      });
+      expect(result.fgColor).toEqual({ rgb: 'FF0000' });
+      expect(result.fill).toEqual({
+        patternType: 'solid',
+        fgColor: { rgb: 'FF0000' },
+      });
+    });
+
+    test('converts partial backgroundColor to hex', () => {
+      const result = GoogleAPI.sheetsFormatToSheetJs({
+        backgroundColor: { red: 0, green: 0, blue: 1 },
+      });
+      expect(result.fgColor).toEqual({ rgb: '0000FF' });
+    });
+
+    test('converts textFormat properties to font', () => {
+      const result = GoogleAPI.sheetsFormatToSheetJs({
+        textFormat: {
+          bold: true,
+          italic: true,
+          underline: true,
+          strikethrough: true,
+          fontSize: 14,
+          fontFamily: 'Arial',
+          foregroundColor: { red: 0, green: 0, blue: 1 },
+        },
+      });
+      expect(result.font.bold).toBe(true);
+      expect(result.font.italic).toBe(true);
+      expect(result.font.underline).toBe(true);
+      expect(result.font.strike).toBe(true);
+      expect(result.font.sz).toBe(14);
+      expect(result.font.name).toBe('Arial');
+      expect(result.font.color).toEqual({ rgb: '0000FF' });
+    });
+
+    test('ignores zero/invalid font size', () => {
+      const result = GoogleAPI.sheetsFormatToSheetJs({
+        textFormat: { fontSize: 0 },
+      });
+      expect(result).toBeNull();
+    });
+
+    test('converts horizontal alignment', () => {
+      expect(
+        GoogleAPI.sheetsFormatToSheetJs({ horizontalAlignment: 'LEFT' }).alignment
+          .horizontal
+      ).toBe('left');
+      expect(
+        GoogleAPI.sheetsFormatToSheetJs({ horizontalAlignment: 'CENTER' }).alignment
+          .horizontal
+      ).toBe('center');
+      expect(
+        GoogleAPI.sheetsFormatToSheetJs({ horizontalAlignment: 'RIGHT' }).alignment
+          .horizontal
+      ).toBe('right');
+    });
+
+    test('converts vertical alignment', () => {
+      expect(
+        GoogleAPI.sheetsFormatToSheetJs({ verticalAlignment: 'TOP' }).alignment.vertical
+      ).toBe('top');
+      expect(
+        GoogleAPI.sheetsFormatToSheetJs({ verticalAlignment: 'MIDDLE' }).alignment.vertical
+      ).toBe('center');
+      expect(
+        GoogleAPI.sheetsFormatToSheetJs({ verticalAlignment: 'BOTTOM' }).alignment.vertical
+      ).toBe('bottom');
+    });
+
+    test('converts WRAP wrapStrategy to wrapText', () => {
+      const result = GoogleAPI.sheetsFormatToSheetJs({ wrapStrategy: 'WRAP' });
+      expect(result.alignment.wrapText).toBe(true);
+    });
+
+    test('converts WRAP_AND_CLIP wrapStrategy to wrapText', () => {
+      const result = GoogleAPI.sheetsFormatToSheetJs({ wrapStrategy: 'WRAP_AND_CLIP' });
+      expect(result.alignment.wrapText).toBe(true);
+    });
+
+    test('does not set wrapText for OVERFLOW_CELL wrapStrategy', () => {
+      const result = GoogleAPI.sheetsFormatToSheetJs({ wrapStrategy: 'OVERFLOW_CELL' });
+      expect(result).toBeNull();
+    });
+
+    test('converts border styles to SheetJS names', () => {
+      const result = GoogleAPI.sheetsFormatToSheetJs({
+        borders: {
+          top: { style: 'SOLID', color: { red: 1, green: 0, blue: 0 } },
+          bottom: { style: 'SOLID_MEDIUM' },
+          left: { style: 'DASHED' },
+          right: { style: 'DOUBLE' },
+        },
+      });
+      expect(result.border.top.style).toBe('thin');
+      expect(result.border.top.color).toEqual({ rgb: 'FF0000' });
+      expect(result.border.bottom.style).toBe('medium');
+      expect(result.border.left.style).toBe('dashed');
+      expect(result.border.right.style).toBe('double');
+    });
+
+    test('ignores borders with unsupported style', () => {
+      const result = GoogleAPI.sheetsFormatToSheetJs({
+        borders: { top: { style: 'SOLID' }, bottom: { style: 'UNKNOWN_STYLE' } },
+      });
+      expect(result.border.top).toBeDefined();
+      expect(result.border.bottom).toBeUndefined();
+    });
+
+    test('converts number format pattern', () => {
+      const result = GoogleAPI.sheetsFormatToSheetJs({
+        numberFormat: { type: 'NUMBER', pattern: '0.00%' },
+      });
+      expect(result.numFmt).toBe('0.00%');
+    });
+
+    test('ignores General number format', () => {
+      const result = GoogleAPI.sheetsFormatToSheetJs({
+        numberFormat: { type: 'NUMBER', pattern: 'General' },
+      });
+      expect(result).toBeNull();
+    });
+
+    test('ignores GENERAL number format', () => {
+      const result = GoogleAPI.sheetsFormatToSheetJs({
+        numberFormat: { type: 'NUMBER', pattern: 'GENERAL' },
+      });
+      expect(result).toBeNull();
+    });
+
+    test('handles combined format properties', () => {
+      const result = GoogleAPI.sheetsFormatToSheetJs({
+        backgroundColor: { red: 1, green: 1, blue: 0 },
+        textFormat: { bold: true, fontSize: 12 },
+        horizontalAlignment: 'CENTER',
+      });
+      expect(result.fgColor).toEqual({ rgb: 'FFFF00' });
+      expect(result.font.bold).toBe(true);
+      expect(result.font.sz).toBe(12);
+      expect(result.alignment.horizontal).toBe('center');
+    });
+
+    test('preserves round-trip with sheetJsToSheetsFormat for color/bold', () => {
+      // Start from a SheetJS style and convert it to Sheets format,
+      // then convert back. The result should contain the same
+      // semantic values.
+      const original = { fgColor: { rgb: 'FF8800' }, font: { bold: true, sz: 13 } };
+      const sheets = GoogleAPI.sheetJsToSheetsFormat(original);
+      const back = GoogleAPI.sheetsFormatToSheetJs(sheets);
+
+      expect(back.fgColor).toEqual({ rgb: 'FF8800' });
+      expect(back.font.bold).toBe(true);
+      expect(back.font.sz).toBe(13);
+    });
+  });
+
+  // ================================================================
+  //  sheetsFormatGridToSheetJs (2D grid wrapper)
+  // ================================================================
+
+  describe('sheetsFormatGridToSheetJs', () => {
+    test('returns null for non-array input', () => {
+      expect(GoogleAPI.sheetsFormatGridToSheetJs(null)).toBeNull();
+      expect(GoogleAPI.sheetsFormatGridToSheetJs(undefined)).toBeNull();
+    });
+
+    test('returns null for empty array', () => {
+      expect(GoogleAPI.sheetsFormatGridToSheetJs([])).toBeNull();
+    });
+
+    test('converts a 2D grid of formats', () => {
+      const grid = [
+        [
+          { backgroundColor: { red: 1, green: 0, blue: 0 } },
+          { textFormat: { bold: true } },
+        ],
+        [null, { backgroundColor: { red: 0, green: 1, blue: 0 } }],
+      ];
+      const result = GoogleAPI.sheetsFormatGridToSheetJs(grid);
+      expect(result).toHaveLength(2);
+      expect(result[0][0].fgColor).toEqual({ rgb: 'FF0000' });
+      expect(result[0][1].font.bold).toBe(true);
+      expect(result[1][0]).toBeNull();
+      expect(result[1][1].fgColor).toEqual({ rgb: '00FF00' });
+    });
+
+    test('preserves null cells in the grid', () => {
+      const grid = [
+        [null, null],
+        [null, null],
+      ];
+      const result = GoogleAPI.sheetsFormatGridToSheetJs(grid);
+      expect(result[0][0]).toBeNull();
+      expect(result[1][1]).toBeNull();
+    });
+  });
+
+  // ================================================================
   //  getToken
   // ================================================================
 
@@ -618,6 +840,57 @@ describe('GoogleAPI', () => {
         rowCount: 2,
         columnCount: 2,
       });
+    });
+
+    test('normalizes headers to title case in value updates', async () => {
+      global.fetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            sheets: [{
+              properties: {
+                sheetId: 0,
+                title: 'Sheet1',
+                gridProperties: { rowCount: 2, columnCount: 2 },
+              },
+            }],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            values: [
+              ['FIRST NAME', 'eMAIL ADDRESS'],
+              ['Alice', 'alice@example.com'],
+            ],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            values: [
+              ['FIRST NAME', 'eMAIL ADDRESS'],
+              ['Alice', 'alice@example.com'],
+            ],
+          }),
+        })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      await GoogleAPI.cleanUploadedSheet('sheet-id', {
+        removeEmptyRows: false,
+        removeEmptyColumns: false,
+        removeDuplicates: false,
+        trim: false,
+        fixNumbers: false,
+        normalizeHeaders: true,
+      });
+
+      const updateBody = JSON.parse(global.fetch.mock.calls[3][1].body);
+      expect(updateBody.valueInputOption).toBe('RAW');
+      expect(updateBody.data).toEqual([
+        { range: "'Sheet1'!A1", values: [['First Name']] },
+        { range: "'Sheet1'!B1", values: [['Email Address']] },
+      ]);
     });
   });
 

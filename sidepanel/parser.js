@@ -412,13 +412,12 @@ const Parser = (() => {
       );
     }
 
-    const preserveFormatting = Boolean(options.preserveFormatting);
     const workbook = XLSX.read(arrayBuffer, {
       type: 'array',
-      cellStyles: preserveFormatting,
-      bookFiles: preserveFormatting,
+      cellStyles: true,
+      bookFiles: true,
     });
-    const themeColors = preserveFormatting ? extractWorkbookThemeColors(workbook) : null;
+    const themeColors = extractWorkbookThemeColors(workbook);
 
     const sheets = workbook.SheetNames.map((name, sheetIdx) => {
       const sheet = workbook.Sheets[name];
@@ -427,9 +426,7 @@ const Parser = (() => {
       // Ensure all rows have consistent column count
       const maxCols = data.reduce((max, row) => Math.max(max, row.length), 0);
 
-      const styles = preserveFormatting
-        ? extractSheetStyles(sheet, data.length, maxCols, workbook, sheetIdx)
-        : null;
+      const styles = extractSheetStyles(sheet, data.length, maxCols, workbook, sheetIdx);
 
       const normalized = new Array(data.length);
       for (let ri = 0; ri < data.length; ri++) {
@@ -501,10 +498,8 @@ const Parser = (() => {
             if (result && Array.isArray(result.sheets)) {
               return result;
             }
-            console.warn('[Parser] Rust CSV result has unexpected shape, falling back to JavaScript');
-          } catch (error) {
-            console.warn('[Parser] Rust CSV parsing failed, falling back to JavaScript:', error);
-            // Fall through to JS implementation
+          } catch (_) {
+            // Rust WASM not available — fall through to JS implementation
           }
         }
 
@@ -544,10 +539,8 @@ const Parser = (() => {
           if (result && Array.isArray(result.sheets)) {
             return result;
           }
-          console.warn('[Parser] Rust XLSX result has unexpected shape, falling back to JavaScript');
-        } catch (error) {
-          console.warn('[Parser] Rust XLSX parsing failed, falling back to JavaScript:', error);
-          // Fall through to JS implementation
+        } catch (_) {
+          // Rust WASM not available — fall through to JS implementation
         }
       }
 
@@ -561,10 +554,8 @@ const Parser = (() => {
           if (result && Array.isArray(result.sheets)) {
             return result;
           }
-          console.warn('[Parser] Rust XLS result has unexpected shape, falling back to JavaScript');
-        } catch (error) {
-          console.warn('[Parser] Rust XLS parsing failed, falling back to JavaScript:', error);
-          // Fall through to JS implementation
+        } catch (_) {
+          // Rust WASM not available — fall through to JS implementation
         }
       }
 
@@ -633,9 +624,8 @@ const Parser = (() => {
               },
             };
           }
-        } catch (error) {
-          console.warn('[Parser.preview] Rust preview failed, falling back:', error);
-          // Fall through to JS implementation
+        } catch (_) {
+          // Rust WASM not available — fall through to JS implementation
         }
       }
 

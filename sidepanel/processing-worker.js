@@ -5,20 +5,14 @@ let _lastMessageId = -1;
 let _initialized = false;
 
 try {
-  importScripts('../lib/xlsx.full.min.js', 'rust_bridge.js', 'parser.js', 'cleaner.js', 'merger.js');
+  importScripts('../lib/xlsx.full.min.js', 'parser.js', 'cleaner.js', 'merger.js');
   _initialized = true;
 } catch (error) {
-  // rust_bridge.js may fail if WASM pkg is missing — that's OK, JS fallback still works
-  try {
-    importScripts('../lib/xlsx.full.min.js', 'parser.js', 'cleaner.js', 'merger.js');
-    _initialized = true;
-  } catch (fallbackError) {
-    self.postMessage({
-      id: -1,
-      ok: false,
-      error: fallbackError?.message || 'Failed to initialize processing worker',
-    });
-  }
+  self.postMessage({
+    id: -1,
+    ok: false,
+    error: error?.message || 'Failed to initialize processing worker',
+  });
 }
 
 // Catch any unhandled promise rejections that escape the onmessage try-catch.
@@ -35,13 +29,6 @@ self.addEventListener('unhandledrejection', (event) => {
     _lastMessageId = -1;
   }
 });
-
-// Try to initialize WASM in background (non-blocking)
-if (typeof RustEngine !== 'undefined') {
-  RustEngine.init().catch(() => {
-    // WASM init failed in worker — JS fallback will be used
-  });
-}
 
 self.onmessage = async (event) => {
   const { id, type, payload } = event.data || {};

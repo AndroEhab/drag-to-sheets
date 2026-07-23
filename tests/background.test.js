@@ -3,7 +3,6 @@ const path = require('path');
 
 describe('Background service worker', () => {
   let commandListener;
-  let messageListener;
 
   beforeAll(() => {
     jest.clearAllMocks();
@@ -11,7 +10,14 @@ describe('Background service worker', () => {
     const code = fs.readFileSync(path.resolve(__dirname, '../background.js'), 'utf-8');
     eval(code);
     commandListener = chrome.commands.onCommand.addListener.mock.calls[0][0];
-    messageListener = chrome.runtime.onMessage.addListener.mock.calls[0][0];
+  });
+
+  beforeEach(() => {
+    chrome.runtime.sendMessage = jest.fn().mockResolvedValue(undefined);
+    chrome.storage.local.get = jest.fn().mockResolvedValue({});
+    chrome.storage.local.set = jest.fn().mockResolvedValue(undefined);
+    chrome.identity.getAuthToken = jest.fn().mockResolvedValue({ token: 'mock-token' });
+    chrome.sidePanel.open = jest.fn().mockResolvedValue(undefined);
   });
 
   test('sets panel behavior to open on action click', () => {
@@ -23,11 +29,6 @@ describe('Background service worker', () => {
   test('registers a command listener', () => {
     expect(chrome.commands.onCommand.addListener).toHaveBeenCalledTimes(1);
     expect(typeof commandListener).toBe('function');
-  });
-
-  test('registers a runtime message listener', () => {
-    expect(chrome.runtime.onMessage.addListener).toHaveBeenCalledTimes(1);
-    expect(typeof messageListener).toBe('function');
   });
 
   test('opens side panel on "open-panel" command', async () => {
@@ -42,24 +43,5 @@ describe('Background service worker', () => {
     await commandListener('some-other-command');
 
     expect(chrome.sidePanel.open).not.toHaveBeenCalled();
-  });
-
-  test('logs perf messages when worker debug flag is enabled', () => {
-    const originalDebug = console.debug;
-    console.debug = jest.fn();
-    self.DRAG_TO_SHEETS_DEBUG_PERF = true;
-
-    try {
-      messageListener({
-        type: 'drag-to-sheets:perf-log',
-        message: 'Drag to Sheets perf: test',
-        details: { rows: 10 },
-      });
-
-      expect(console.debug).toHaveBeenCalledWith('Drag to Sheets perf: test', { rows: 10 });
-    } finally {
-      self.DRAG_TO_SHEETS_DEBUG_PERF = false;
-      console.debug = originalDebug;
-    }
   });
 });

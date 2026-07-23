@@ -190,6 +190,7 @@ const Cleaner = (() => {
       return header
         .trim()
         .replace(/\s+/g, ' ')
+        .toLowerCase()
         .replace(/\b\w/g, (ch) => ch.toUpperCase());
     });
 

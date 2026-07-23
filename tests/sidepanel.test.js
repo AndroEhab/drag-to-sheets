@@ -105,7 +105,6 @@ function setupDOM() {
         </div>
         <input type="checkbox" id="opt-numbers">
         <input type="checkbox" id="opt-headers">
-        <input type="checkbox" id="opt-preserve-fmt">
       </div>
     </div>
     <div id="preview-panel" class="hidden">
@@ -438,12 +437,11 @@ describe('DragToSheetsApp', () => {
       expect(app.uploadBtn.disabled).toBe(false);
     });
 
-    test('passes formatting preference into parsing for merge workloads', async () => {
+    test('always passes preserveFormatting into parsing for merge workloads', async () => {
       const app = await createApp();
       Parser.parse.mockResolvedValue({
         sheets: [{ name: 'f', data: [['A']] }],
       });
-      document.getElementById('opt-preserve-fmt').checked = true;
       document.querySelector('input[name="open-mode"][value="merge"]').checked = true;
 
       await app.handleFiles([
@@ -493,7 +491,6 @@ describe('DragToSheetsApp', () => {
       const app = await createApp();
       const file = new File(['a'], 'big.xlsx');
       Object.defineProperty(file, 'size', { value: 20 * 1024 * 1024 });
-      document.getElementById('opt-preserve-fmt').checked = true;
 
       await app.handleFiles([file]);
 
@@ -527,7 +524,6 @@ describe('DragToSheetsApp', () => {
       Parser.parse.mockResolvedValue({
         sheets: [{ name: 'f', data: [['A']] }],
       });
-      document.getElementById('opt-preserve-fmt').checked = true;
       document.querySelector('input[name="open-mode"][value="merge"]').checked = true;
 
       await app.handleFiles([
@@ -725,7 +721,6 @@ describe('DragToSheetsApp', () => {
       document.getElementById('opt-duplicates').checked = false;
       document.getElementById('opt-numbers').checked = true;
       document.getElementById('opt-headers').checked = false;
-      document.getElementById('opt-preserve-fmt').checked = true;
 
       const opts = app.getCleaningOptions();
 
@@ -777,6 +772,48 @@ describe('DragToSheetsApp', () => {
       document.querySelector('input[name="open-mode"][value="merge"]').checked = true;
 
       expect(app.getOpenMode()).toBe('merge');
+    });
+  });
+
+  describe('empty preview states', () => {
+    test('shows no-data notice for an empty file in separate mode', async () => {
+      const app = await createApp();
+      jest.spyOn(app, 'shouldDeferPreview').mockReturnValue(false);
+      app.files = [
+        {
+          name: 'empty.csv',
+          ext: 'csv',
+          parsed: { sheets: [{ name: 'Sheet1', data: [] }] },
+        },
+      ];
+
+      await app.refreshPreview();
+
+      expect(app.previewPanel.classList.contains('hidden')).toBe(false);
+      expect(app.previewTable.textContent).toContain('No data found');
+    });
+
+    test('shows no-data notice when merged files are all empty', async () => {
+      const app = await createApp();
+      jest.spyOn(app, 'shouldDeferPreview').mockReturnValue(false);
+      document.querySelector('input[name="open-mode"][value="merge"]').checked = true;
+      app.files = [
+        {
+          name: 'empty-1.csv',
+          ext: 'csv',
+          parsed: { sheets: [{ name: 'Sheet1', data: [] }] },
+        },
+        {
+          name: 'empty-2.csv',
+          ext: 'csv',
+          parsed: { sheets: [{ name: 'Sheet1', data: [] }] },
+        },
+      ];
+
+      await app.refreshPreview();
+
+      expect(app.previewPanel.classList.contains('hidden')).toBe(false);
+      expect(app.previewTable.textContent).toContain('No data found');
     });
   });
 
@@ -1042,7 +1079,135 @@ describe('DragToSheetsApp', () => {
     });
   });
 
-  // ---- setStatus ----
+  // ---- uploadSingleFromList ----
+
+  describe('uploadSingleFromList', () => {
+    test('uploads only the targeted file from a list of many', async () => {
+      const app = await createApp();
+      const fileA = new File(['a'], 'a.csv');
+      const fileB = new File(['b'], 'b.csv');
+      const fileC = new File(['c'], 'c.csv');
+      app.files = [
+        { file: fileA, parsed: null, name: 'a.csv', ext: 'csv', size: 1024, stats: null, identityKey: 'a.csv::csv::1024::0', lazy: true },
+        { file: fileB, parsed: null, name: 'b.csv', ext: 'csv', size: 1024, stats: null, identityKey: 'b.csv::csv::1024::1', lazy: true },
+        { file: fileC, parsed: null, name: 'c.csv', ext: 'csv', size: 1024, stats: null, identityKey: 'c.csv::csv::1024::2', lazy: true },
+      ];
+
+      await app.uploadSingleFromList(1);
+
+      expect(GoogleAPI.uploadFileToDrive).toHaveBeenCalledTimes(1);
+      expect(GoogleAPI.uploadFileToDrive).toHaveBeenCalledWith(
+        fileB,
+        'b',
+        expect.any(Object)
+      );
+      expect(app.files).toHaveLength(3);
+      expect(app.files.map((f) => f.name)).toEqual(['a.csv', 'b.csv', 'c.csv']);
+    });
+
+    test('keeps the file in the list after a successful upload', async () => {
+      const app = await createApp();
+      const file = new File(['x'], 'keep.csv');
+      app.files = [
+        { file, parsed: null, name: 'keep.csv', ext: 'csv', size: 1024, stats: null, identityKey: 'keep.csv::csv::1024::0', lazy: true },
+      ];
+
+      await app.uploadSingleFromList(0);
+
+      expect(app.files).toHaveLength(1);
+      expect(app.files[0].name).toBe('keep.csv');
+    });
+
+    test('applies current cleaning options to the single upload', async () => {
+      const app = await createApp();
+      document.getElementById('opt-trim').checked = true;
+      document.getElementById('opt-empty-rows').checked = true;
+      const file = new File(['x'], 'clean.csv');
+      app.files = [
+        { file, parsed: null, name: 'clean.csv', ext: 'csv', size: 1024, stats: null, identityKey: 'clean.csv::csv::1024::0', lazy: true },
+      ];
+
+      await app.uploadSingleFromList(0);
+
+      expect(GoogleAPI.uploadFileToDrive).toHaveBeenCalledWith(file, 'clean', expect.any(Object));
+      expect(GoogleAPI.cleanUploadedSheet).toHaveBeenCalledWith(
+        'drive-456',
+        expect.objectContaining({ trim: true, removeEmptyRows: true }),
+        expect.any(Object)
+      );
+    });
+
+    test('parses and cleans locally for non-Excel files with cleaning', async () => {
+      const app = await createApp();
+      document.getElementById('opt-trim').checked = true;
+      app.files = [{
+        file: new File(['x'], 'parse.csv'),
+        parsed: null,
+        name: 'parse.csv',
+        ext: 'csv',
+        size: 1024,
+        stats: null,
+        identityKey: 'parse.csv::csv::1024::0',
+        lazy: true,
+      }];
+      jest.spyOn(app, 'shouldUseNativeDriveImport').mockReturnValue(false);
+      jest.spyOn(app, 'ensureParsedEntry').mockImplementation(async (item) => {
+        item.parsed = { sheets: [{ name: 'parse', data: [['A', 'B'], ['1', '2']] }] };
+      });
+      jest.spyOn(app, 'getCleanedSheetData').mockResolvedValue([['A', 'B'], ['1', '2']]);
+
+      await app.uploadSingleFromList(0);
+
+      expect(app.ensureParsedEntry).toHaveBeenCalled();
+      expect(GoogleAPI.createSpreadsheet).toHaveBeenCalledWith(
+        'parse',
+        [{ name: 'parse', data: [['A', 'B'], ['1', '2']] }],
+        expect.any(Object)
+      );
+      expect(GoogleAPI.uploadFileToDrive).not.toHaveBeenCalled();
+    });
+
+    test('does nothing when another upload is already in progress', async () => {
+      const app = await createApp();
+      app.uploading = true;
+      app.files = [
+        { file: new File(['x'], 'a.csv'), parsed: null, name: 'a.csv', ext: 'csv', size: 1024, stats: null, identityKey: 'a.csv::csv::1024::0', lazy: true },
+      ];
+
+      await app.uploadSingleFromList(0);
+
+      expect(GoogleAPI.uploadFileToDrive).not.toHaveBeenCalled();
+      expect(GoogleAPI.createSpreadsheet).not.toHaveBeenCalled();
+    });
+
+    test('does nothing for an out-of-range index', async () => {
+      const app = await createApp();
+      app.files = [
+        { file: new File(['x'], 'a.csv'), parsed: null, name: 'a.csv', ext: 'csv', size: 1024, stats: null, identityKey: 'a.csv::csv::1024::0', lazy: true },
+      ];
+
+      await app.uploadSingleFromList(5);
+      await app.uploadSingleFromList(-1);
+
+      expect(GoogleAPI.uploadFileToDrive).not.toHaveBeenCalled();
+      expect(GoogleAPI.createSpreadsheet).not.toHaveBeenCalled();
+    });
+
+    test('surfaces errors via setStatus and clears the uploading flag', async () => {
+      const app = await createApp();
+      app.files = [
+        { file: new File(['x'], 'bad.csv'), parsed: null, name: 'bad.csv', ext: 'csv', size: 1024, stats: null, identityKey: 'bad.csv::csv::1024::0', lazy: true },
+      ];
+      GoogleAPI.uploadFileToDrive.mockRejectedValueOnce(new Error('boom'));
+
+      await app.uploadSingleFromList(0);
+
+      expect(app.uploading).toBe(false);
+      expect(app.uploadBtn.disabled).toBe(false);
+      expect(app.loadingText.textContent).toContain('Upload failed: boom');
+    });
+
+  });
 
   describe('setStatus', () => {
     test('sets loading text and panel class', async () => {
@@ -1185,6 +1350,50 @@ describe('DragToSheetsApp', () => {
       const reorderBtns = document.querySelectorAll('.reorder-btn');
       expect(reorderBtns.length).toBeGreaterThan(0);
     });
+
+    test('renders a per-file open button with accessible label', async () => {
+      const app = await createApp();
+      app.files = [
+        { name: 'report.csv', ext: 'csv', parsed: { sheets: [{ name: 'report', data: [['A']] }] } },
+        { name: 'data.csv', ext: 'csv', parsed: { sheets: [{ name: 'data', data: [['B']] }] } },
+      ];
+
+      app.renderFileList();
+
+      const openBtns = document.querySelectorAll('.open-file-btn');
+      expect(openBtns).toHaveLength(2);
+      expect(openBtns[0].getAttribute('aria-label')).toBe('Open report.csv in Sheets');
+      expect(openBtns[1].getAttribute('aria-label')).toBe('Open data.csv in Sheets');
+    });
+
+    test('disables per-file open buttons while an upload is in progress', async () => {
+      const app = await createApp();
+      app.files = [
+        { name: 'a.csv', ext: 'csv', parsed: { sheets: [{ name: 'a', data: [['A']] }] } },
+        { name: 'b.csv', ext: 'csv', parsed: { sheets: [{ name: 'b', data: [['B']] }] } },
+      ];
+      app.uploading = true;
+
+      app.renderFileList();
+
+      const openBtns = document.querySelectorAll('.open-file-btn');
+      expect(Array.from(openBtns).every((btn) => btn.disabled)).toBe(true);
+    });
+
+    test('per-file open button triggers uploadSingleFromList with the correct index', async () => {
+      const app = await createApp();
+      app.files = [
+        { name: 'a.csv', ext: 'csv', parsed: { sheets: [{ name: 'a', data: [['A']] }] } },
+        { name: 'b.csv', ext: 'csv', parsed: { sheets: [{ name: 'b', data: [['B']] }] } },
+      ];
+      const spy = jest.spyOn(app, 'uploadSingleFromList').mockResolvedValue();
+
+      app.renderFileList();
+      const openBtns = document.querySelectorAll('.open-file-btn');
+      openBtns[1].click();
+
+      expect(spy).toHaveBeenCalledWith(1);
+    });
   });
 
   // ---- URL bar toggle ----
@@ -1193,7 +1402,7 @@ describe('DragToSheetsApp', () => {
     test('opens URL bar', async () => {
       const app = await createApp();
 
-      app.toggleUrlBar(true);
+      await app.toggleUrlBar(true);
 
       expect(app.urlBar.classList.contains('hidden')).toBe(false);
       expect(app.urlToggle.getAttribute('aria-expanded')).toBe('true');
@@ -1201,9 +1410,9 @@ describe('DragToSheetsApp', () => {
 
     test('closes URL bar', async () => {
       const app = await createApp();
-      app.toggleUrlBar(true);
+      await app.toggleUrlBar(true);
 
-      app.toggleUrlBar(false);
+      await app.toggleUrlBar(false);
 
       expect(app.urlBar.classList.contains('hidden')).toBe(true);
       expect(app.urlToggle.getAttribute('aria-expanded')).toBe('false');
@@ -1212,10 +1421,10 @@ describe('DragToSheetsApp', () => {
     test('toggles when no argument given', async () => {
       const app = await createApp();
 
-      app.toggleUrlBar(); // opens
+      await app.toggleUrlBar(); // opens
       expect(app.urlBar.classList.contains('hidden')).toBe(false);
 
-      app.toggleUrlBar(); // closes
+      await app.toggleUrlBar(); // closes
       expect(app.urlBar.classList.contains('hidden')).toBe(true);
     });
   });
