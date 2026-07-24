@@ -478,8 +478,33 @@
 
     async getResponsiveSeparatePreview(item) {
       const preview = await this.ensurePreviewSample(item);
+      const options = this.getCleaningOptions();
+      const rawData = preview.sheets[0]?.data || [];
+
+      let cellMeta = preview.sheets[0]?.cellMeta || null;
+      if (!cellMeta) {
+        cellMeta = rawData.map(row => row.map(v => Cleaner.tokenFromValue(v)));
+      }
+
+      const structuralOps = options.removeEmptyRows || options.removeEmptyColumns || options.removeDuplicates;
+      const hasNonStructural = options.trim || options.fixNumbers || options.normalizeHeaders;
+
+      let cleanedData = rawData;
+      const notices = [];
+
+      if (hasNonStructural) {
+        const sanitized = { ...options, removeEmptyRows: false, removeEmptyColumns: false, removeDuplicates: false };
+        const cleaned = Cleaner.apply(rawData, sanitized, cellMeta);
+        cleanedData = Array.isArray(cleaned) ? cleaned : cleaned.data;
+      }
+
+      if (structuralOps) {
+        notices.push('Row/column removal and duplicate filtering not shown in preview — applied on upload.');
+      }
+
       return {
-        data: preview.sheets[0]?.data || [],
+        data: cleanedData,
+        notices,
         summary: {
           totalRows: preview.previewMeta?.rowCount,
           totalCols: preview.previewMeta?.colCount,
@@ -498,11 +523,16 @@
 
       for (const item of this.files) {
         const preview = await this.ensurePreviewSample(item);
-        const data = preview.sheets[0]?.data || [];
+        const rawData = preview.sheets[0]?.data || [];
+        let cellMeta = preview.sheets[0]?.cellMeta || null;
+        if (!cellMeta) {
+          cellMeta = rawData.map(row => row.map(v => Cleaner.tokenFromValue(v)));
+        }
         sampleFiles.push({
           sheets: [{
             name: preview.sheets[0]?.name || item.name,
-            data,
+            data: rawData,
+            cellMeta,
           }],
         });
 
@@ -526,8 +556,24 @@
         () => Merger.merge(sampleFiles, { smartMapping, customMappings: activeCustomMappings })
       );
 
+      // Apply non-structural cleaning to merged sample
+      const structuralOps = options.removeEmptyRows || options.removeEmptyColumns || options.removeDuplicates;
+      const hasNonStructural = options.trim || options.fixNumbers || options.normalizeHeaders;
+      const notices = [];
+
+      if (hasNonStructural && merged.sheets[0]?.data) {
+        const sanitized = { ...options, removeEmptyRows: false, removeEmptyColumns: false, removeDuplicates: false };
+        const cleaned = Cleaner.apply(merged.sheets[0].data, sanitized, merged.sheets[0].cellMeta || null);
+        merged.sheets[0].data = Array.isArray(cleaned) ? cleaned : cleaned.data;
+      }
+
+      if (structuralOps) {
+        notices.push('Row/column removal and duplicate filtering not shown in preview — applied on upload.');
+      }
+
       return {
         merged,
+        notices,
         summary: {
           totalRows: totalRowsKnown ? totalRows : null,
           totalCols: merged.sheets[0]?.data?.[0]?.length || 0,
@@ -1998,7 +2044,7 @@
 
             const sheet = samplePreview.merged.sheets[0];
             if (sheet && this.hasPreviewData(sheet.data)) {
-              this.renderPreviewTable(sheet.data, `Merged (${this.files.length} files)`, samplePreview.summary);
+              this.renderPreviewTable(sheet.data, `Merged (${this.files.length} files)`, samplePreview.summary, samplePreview.notices);
               this.previewPanel.classList.remove('hidden');
               this.logTiming('refresh preview sample', previewStart, {
                 mode,
@@ -2099,7 +2145,7 @@
             const samplePreview = await this.getResponsiveSeparatePreview(item);
             if (!this.isPreviewTaskCurrent(previewTaskId)) return;
             if (this.hasPreviewData(samplePreview.data)) {
-              this.renderPreviewTable(samplePreview.data, item.name, samplePreview.summary);
+              this.renderPreviewTable(samplePreview.data, item.name, samplePreview.summary, samplePreview.notices);
               this.previewPanel.classList.remove('hidden');
             } else {
               this.renderNoDataPreview();
@@ -2623,7 +2669,7 @@
       return select;
     }
 
-    renderPreviewTable(data, label = '', summary = {}) {
+    renderPreviewTable(data, label = '', summary = {}, notices = []) {
       if (!this.hasPreviewData(data)) {
         this.renderNoDataPreview();
         return;
@@ -2649,7 +2695,11 @@
         return s;
       };
 
-      let html = '<table>';
+      let html = '';
+      if (notices && notices.length > 0) {
+        html += '<div class="preview-notice">' + notices.map(n => this.escapeHtml(n)).join('<br>') + '</div>';
+      }
+      html += '<table>';
 
       // Column-letter header row: corner cell + A B C … + optional truncation
       if (display.length > 0) {

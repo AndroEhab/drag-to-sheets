@@ -236,49 +236,76 @@ const GoogleAPI = (() => {
     return formula.startsWith('=') ? formula : '=' + formula;
   }
 
-  function buildTypedUpdateRows(data, cellMeta) {
-    const rows = data.map((row, ri) => ({
-      values: row.map((cell, ci) => {
-        const token = cellMeta && cellMeta[ri] && cellMeta[ri][ci];
-        const dataValue = cell;
+  function buildTypedRowEntry(row, cellMetaRow, ri) {
+    const values = row.map((cell, ci) => {
+      const token = cellMetaRow && cellMetaRow[ci];
+      const dataValue = cell;
 
-        if (token && token.type && token.type !== 'empty') {
-          switch (token.type) {
-            case 'formula':
-              return { userEnteredValue: { formulaValue: toSheetsFormula(token.value) } };
-            case 'number':
-              return { userEnteredValue: { numberValue: token.value } };
-            case 'boolean':
-              return { userEnteredValue: { boolValue: token.value } };
-            case 'date': {
-              const fmtType = token.formatType || 'DATE';
-              const patterns = { DATE: 'yyyy-mm-dd', TIME: 'hh:mm:ss', DATE_TIME: 'yyyy-mm-dd hh:mm:ss' };
-              return {
-                userEnteredValue: { numberValue: token.value },
-                userEnteredFormat: {
-                  numberFormat: { type: fmtType, pattern: patterns[fmtType] || patterns.DATE },
-                },
-              };
-            }
-            case 'string': {
-              const str = String(token.value ?? '');
-              return { userEnteredValue: { stringValue: str } };
-            }
-            default:
-              return { userEnteredValue: { stringValue: String(cell ?? '') } };
+      if (token && token.type && token.type !== 'empty') {
+        switch (token.type) {
+          case 'formula':
+            return { userEnteredValue: { formulaValue: toSheetsFormula(token.value) } };
+          case 'number':
+            return { userEnteredValue: { numberValue: token.value } };
+          case 'boolean':
+            return { userEnteredValue: { boolValue: token.value } };
+          case 'date': {
+            const fmtType = token.formatType || 'DATE';
+            const patterns = { DATE: 'yyyy-mm-dd', TIME: 'hh:mm:ss', DATE_TIME: 'yyyy-mm-dd hh:mm:ss' };
+            return {
+              userEnteredValue: { numberValue: token.value },
+              userEnteredFormat: {
+                numberFormat: { type: fmtType, pattern: patterns[fmtType] || patterns.DATE },
+              },
+            };
           }
+          case 'string': {
+            const str = String(token.value ?? '');
+            return { userEnteredValue: { stringValue: str } };
+          }
+          default:
+            return { userEnteredValue: { stringValue: String(cell ?? '') } };
         }
+      }
 
-        if (dataValue !== null && dataValue !== undefined && dataValue !== '') {
-          if (typeof dataValue === 'number') return { userEnteredValue: { numberValue: dataValue } };
-          if (typeof dataValue === 'boolean') return { userEnteredValue: { boolValue: dataValue } };
-          return { userEnteredValue: { stringValue: String(dataValue) } };
-        }
+      if (dataValue !== null && dataValue !== undefined && dataValue !== '') {
+        if (typeof dataValue === 'number') return { userEnteredValue: { numberValue: dataValue } };
+        if (typeof dataValue === 'boolean') return { userEnteredValue: { boolValue: dataValue } };
+        return { userEnteredValue: { stringValue: String(dataValue) } };
+      }
 
-        return {};
-      }),
-    }));
-    return rows;
+      return {};
+    });
+    return { values };
+  }
+
+  function buildTypedUpdateRows(data, cellMeta) {
+    const blocks = [];
+    let currentRows = [];
+    let currentStartRow = 0;
+    let currentCells = 0;
+    const colCount = Math.max(...data.map((r) => r.length), 1);
+
+    for (let ri = 0; ri < data.length; ri++) {
+      const row = data[ri];
+      const rowCells = Math.max(row.length, 1);
+
+      if (currentRows.length > 0 && currentCells + rowCells > MAX_VALUE_CELLS_PER_REQUEST) {
+        blocks.push({ rows: currentRows, startRow: currentStartRow, endRow: currentStartRow + currentRows.length, colCount });
+        currentRows = [];
+        currentCells = 0;
+        currentStartRow = ri;
+      }
+
+      currentRows.push(buildTypedRowEntry(row, cellMeta && cellMeta[ri], ri));
+      currentCells += rowCells;
+    }
+
+    if (currentRows.length > 0) {
+      blocks.push({ rows: currentRows, startRow: currentStartRow, endRow: currentStartRow + currentRows.length, colCount });
+    }
+
+    return blocks;
   }
 
   function buildValueRangesForSheets(sheetsData) {
@@ -619,7 +646,7 @@ const GoogleAPI = (() => {
     const uev = (cellData && cellData.userEnteredValue) || {};
     const fmtType = cellData && cellData.effectiveFormat && cellData.effectiveFormat.numberFormat ? cellData.effectiveFormat.numberFormat.type : undefined;
     if (uev.formulaValue !== undefined) return { type: 'formula', value: uev.formulaValue };
-    if (fmtType === 'DATE' || fmtType === 'TIME' || fmtType === 'DATE_TIME') return { type: 'date', value: uev.numberValue };
+    if (fmtType === 'DATE' || fmtType === 'TIME' || fmtType === 'DATE_TIME') return { type: 'date', value: uev.numberValue, formatType: fmtType };
     if (uev.boolValue !== undefined) return { type: 'boolean', value: uev.boolValue };
     if (uev.numberValue !== undefined) return { type: 'number', value: uev.numberValue };
     if (uev.stringValue !== undefined && uev.stringValue !== '') return { type: 'string', value: uev.stringValue };
@@ -630,7 +657,9 @@ const GoogleAPI = (() => {
     return tokens.reduce((parts, t, idx) => {
       if (excluded.has(idx)) return parts;
       const val = (t.type === 'string' && shouldTrim) ? String(t.value || '').trim() : t.value;
-      parts.push(`${t.type}\x00${val ?? ''}`);
+      let key = `${t.type}\x00${val ?? ''}`;
+      if (t.type === 'date' && t.formatType) key += `\x00${t.formatType}`;
+      parts.push(key);
       return parts;
     }, []).join('\x01');
   }
@@ -811,9 +840,10 @@ const GoogleAPI = (() => {
 
     const spreadsheetId = spreadsheet.spreadsheetId;
 
-    // Write values — use typed cells when cellMeta is available, RAW otherwise
-    const typedSheets = sanitized.filter((s) => !!s.cellMeta);
-    const rawSheets = sanitized.filter((s) => !s.cellMeta);
+    // Write values — use typed cells only when at least one sheet has real metadata, RAW otherwise
+    const hasMetadata = sanitized.some((s) => s.cellMeta != null);
+    const typedSheets = hasMetadata ? sanitized.filter((s) => s.cellMeta != null) : [];
+    const rawSheets = hasMetadata ? sanitized.filter((s) => s.cellMeta == null) : sanitized;
 
     if (rawSheets.length > 0) {
       const valueRanges = buildValueRangesForSheets(rawSheets);
@@ -829,22 +859,22 @@ const GoogleAPI = (() => {
         const gsSheet = info.sheets.find((s) => s.properties.title === sheet.name);
         if (!gsSheet) continue;
         const sheetId = gsSheet.properties.sheetId;
-        const rowCount = sheet.data.length;
-        const colCount = Math.max(...sheet.data.map((r) => r.length), 1);
-        const rows = buildTypedUpdateRows(sheet.data, sheet.cellMeta);
-        requests.push({
-          updateCells: {
-            rows,
-            fields: 'userEnteredValue,userEnteredFormat',
-            range: {
-              sheetId,
-              startRowIndex: 0,
-              endRowIndex: rowCount,
-              startColumnIndex: 0,
-              endColumnIndex: colCount,
+        const blocks = buildTypedUpdateRows(sheet.data, sheet.cellMeta);
+        for (const block of blocks) {
+          requests.push({
+            updateCells: {
+              rows: block.rows,
+              fields: 'userEnteredValue,userEnteredFormat',
+              range: {
+                sheetId,
+                startRowIndex: block.startRow,
+                endRowIndex: block.endRow,
+                startColumnIndex: 0,
+                endColumnIndex: block.colCount,
+              },
             },
-          },
-        });
+          });
+        }
       }
       if (requests.length > 0) {
         await sendBatchUpdateRequests(spreadsheetId, requests, context);
@@ -1206,5 +1236,7 @@ const GoogleAPI = (() => {
     sheetsFormatToSheetJs,
     sheetsFormatGridToSheetJs,
     applyFormatting,
+    tokenFromCellDataFallback,
+    rowComparisonKeyFallback,
   };
 })();

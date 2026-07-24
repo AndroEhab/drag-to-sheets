@@ -632,7 +632,7 @@ describe('Parser', () => {
       expect(Parser.hasTypedCellMetadata(parsed)).toBe(true);
     });
 
-    test('empty token type passes', () => {
+    test('empty token with non-empty header data fails', () => {
       const parsed = {
         sheets: [{
           name: 'S1',
@@ -640,7 +640,7 @@ describe('Parser', () => {
           cellMeta: [[{ type: 'empty' }]],
         }],
       };
-      expect(Parser.hasTypedCellMetadata(parsed)).toBe(true);
+      expect(Parser.hasTypedCellMetadata(parsed)).toBe(false);
     });
 
     test('date token with valid formatType passes', () => {
@@ -650,6 +650,132 @@ describe('Parser', () => {
             name: 'S1',
             data: [['Field']],
             cellMeta: [[{ type: 'date', value: 1, formatType: fmt }]],
+          }],
+        };
+        expect(Parser.hasTypedCellMetadata(parsed)).toBe(true);
+      }
+    });
+
+    test('metadata row too wide fails', () => {
+      const parsed = {
+        sheets: [{
+          name: 'S1',
+          data: [['A']],
+          cellMeta: [[{ type: 'string', value: 'A' }, { type: 'empty' }]],
+        }],
+      };
+      expect(Parser.hasTypedCellMetadata(parsed)).toBe(false);
+    });
+
+    test('empty token with non-empty data fails', () => {
+      const parsed = {
+        sheets: [{
+          name: 'S1',
+          data: [['A'], ['value']],
+          cellMeta: [[{ type: 'string', value: 'A' }], [{ type: 'empty' }]],
+        }],
+      };
+      expect(Parser.hasTypedCellMetadata(parsed)).toBe(false);
+    });
+
+    test('formula token with empty display value is valid', () => {
+      const parsed = {
+        sheets: [{
+          name: 'S1',
+          data: [['Result'], ['']],
+          cellMeta: [[{ type: 'string', value: 'Result' }], [{ type: 'formula', value: '=IF(FALSE,"x","")', displayValue: '' }]],
+        }],
+      };
+      expect(Parser.hasTypedCellMetadata(parsed)).toBe(true);
+    });
+
+    test('metadata row exact width matching passes', () => {
+      const parsed = {
+        sheets: [{
+          name: 'S1',
+          data: [['A', 'B'], ['1', '2']],
+          cellMeta: [
+            [{ type: 'string', value: 'A' }, { type: 'string', value: 'B' }],
+            [{ type: 'string', value: '1' }, { type: 'string', value: '2' }],
+          ],
+        }],
+      };
+      expect(Parser.hasTypedCellMetadata(parsed)).toBe(true);
+    });
+
+    test('date token without formatType fails', () => {
+      const parsed = {
+        sheets: [{
+          name: 'S1',
+          data: [['Field']],
+          cellMeta: [[{ type: 'date', value: 45306 }]],
+        }],
+      };
+      expect(Parser.hasTypedCellMetadata(parsed)).toBe(false);
+    });
+
+    test('date token with non-finite value fails', () => {
+      const parsed = {
+        sheets: [{
+          name: 'S1',
+          data: [['Field']],
+          cellMeta: [[{ type: 'date', value: Infinity, formatType: 'DATE' }]],
+        }],
+      };
+      expect(Parser.hasTypedCellMetadata(parsed)).toBe(false);
+    });
+
+    test('number token with non-number value fails', () => {
+      const parsed = {
+        sheets: [{
+          name: 'S1',
+          data: [['Field']],
+          cellMeta: [[{ type: 'number', value: '42' }]],
+        }],
+      };
+      expect(Parser.hasTypedCellMetadata(parsed)).toBe(false);
+    });
+
+    test('boolean token with non-boolean value fails', () => {
+      const parsed = {
+        sheets: [{
+          name: 'S1',
+          data: [['Field']],
+          cellMeta: [[{ type: 'boolean', value: 'true' }]],
+        }],
+      };
+      expect(Parser.hasTypedCellMetadata(parsed)).toBe(false);
+    });
+
+    test('string token with non-string value fails', () => {
+      const parsed = {
+        sheets: [{
+          name: 'S1',
+          data: [['Field']],
+          cellMeta: [[{ type: 'string', value: 42 }]],
+        }],
+      };
+      expect(Parser.hasTypedCellMetadata(parsed)).toBe(false);
+    });
+
+    test('data row that is not an array fails', () => {
+      const parsed = {
+        sheets: [{
+          name: 'S1',
+          data: ['not-an-array'],
+          cellMeta: [[{ type: 'string', value: 'x' }]],
+        }],
+      };
+      expect(Parser.hasTypedCellMetadata(parsed)).toBe(false);
+    });
+
+    test('empty token with empty data value passes', () => {
+      for (const emptyVal of [null, undefined, '']) {
+        const parsed = {
+          sheets: [{
+            name: 'S1',
+            data: [[emptyVal]],
+            cellMeta: [[{ type: 'empty' }]],
           }],
         };
         expect(Parser.hasTypedCellMetadata(parsed)).toBe(true);

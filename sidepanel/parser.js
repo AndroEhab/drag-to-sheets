@@ -591,14 +591,30 @@ const Parser = (() => {
       return sheet.cellMeta.every((metaRow, ri) => {
         if (!Array.isArray(metaRow)) return false;
         const dataRow = sheet.data[ri];
-        const width = dataRow ? dataRow.length : 0;
-        if (metaRow.length < width) return false;
+        if (!Array.isArray(dataRow)) return false;
+        const width = dataRow.length;
+        if (metaRow.length !== width) return false;
 
         return metaRow.every((token, ci) => {
           if (!token || typeof token !== 'object') return false;
           if (!VALID_TYPES.has(token.type)) return false;
-          if (token.type === 'formula' && (!token.value || typeof token.value !== 'string' || token.value.trim() === '')) return false;
-          if (token.type === 'date' && (!token.formatType || !DATE_TYPES.has(token.formatType))) return false;
+          const dataValue = dataRow[ci];
+
+          if (token.type === 'number') {
+            if (typeof token.value !== 'number' || !isFinite(token.value)) return false;
+          } else if (token.type === 'boolean') {
+            if (typeof token.value !== 'boolean') return false;
+          } else if (token.type === 'string') {
+            if (typeof token.value !== 'string') return false;
+          } else if (token.type === 'formula') {
+            if (!token.value || typeof token.value !== 'string' || token.value.trim() === '') return false;
+          } else if (token.type === 'date') {
+            if (typeof token.value !== 'number' || !isFinite(token.value)) return false;
+            if (!token.formatType || !DATE_TYPES.has(token.formatType)) return false;
+          } else if (token.type === 'empty') {
+            if (dataValue !== null && dataValue !== undefined && dataValue !== '') return false;
+          }
+
           return true;
         });
       });

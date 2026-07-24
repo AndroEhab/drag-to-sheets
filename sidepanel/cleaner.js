@@ -323,7 +323,7 @@ const Cleaner = (() => {
       : undefined;
 
     if (uev.formulaValue !== undefined) return { type: 'formula', value: uev.formulaValue };
-    if (fmtType === 'DATE' || fmtType === 'TIME' || fmtType === 'DATE_TIME') return { type: 'date', value: uev.numberValue };
+    if (fmtType === 'DATE' || fmtType === 'TIME' || fmtType === 'DATE_TIME') return { type: 'date', value: uev.numberValue, formatType: fmtType };
     if (uev.boolValue !== undefined) return { type: 'boolean', value: uev.boolValue };
     if (uev.numberValue !== undefined) return { type: 'number', value: uev.numberValue };
     if (uev.stringValue !== undefined && uev.stringValue !== '') return { type: 'string', value: uev.stringValue };

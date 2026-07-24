@@ -797,5 +797,33 @@ describe('Merger', () => {
       expect(meta[3][0]).toEqual({ type: 'number', value: 0 });
       expect(meta[4][0]).toEqual({ type: 'empty' });
     });
+
+    test('duplicate headers: formula returning empty string wins mapped position, metadata follows', () => {
+      const f1 = {
+        sheets: [{
+          name: 'S1',
+          data: [['Col', 'Col'], ['=IF(FALSE,"x","")', 'real']],
+          cellMeta: [
+            [{ type: 'string', value: 'Col' }, { type: 'string', value: 'Col' }],
+            [{ type: 'formula', value: '=IF(FALSE,"x","")', displayValue: '' }, { type: 'string', value: 'real' }],
+          ],
+        }],
+      };
+      const f2 = {
+        sheets: [{
+          name: 'S2',
+          data: [['Col'], ['other']],
+          cellMeta: [[{ type: 'string', value: 'Col' }], [{ type: 'string', value: 'other' }]],
+        }],
+      };
+      const result = Merger.merge([f1, f2]);
+      const meta = result.sheets[0].cellMeta;
+      // f1 row: both Col columns map to index 0. First 'Col' has formula="=IF(FALSE,"x","")" (display ''),
+      // the formula token wins first position. Metadata from the FIRST winning source cell should be formula.
+      expect(meta[1][0].type).toBe('formula');
+      expect(meta[1][0].value).toBe('=IF(FALSE,"x","")');
+      // f2 row should come through
+      expect(meta[2][0]).toEqual({ type: 'string', value: 'other' });
+    });
   });
 });

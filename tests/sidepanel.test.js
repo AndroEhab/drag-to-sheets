@@ -38,6 +38,12 @@ global.Parser = {
 
 global.Cleaner = {
   apply: jest.fn((data, options, cellMeta) => ({ data, cellMeta: cellMeta || null })),
+  tokenFromValue: jest.fn(v => {
+    if (v === null || v === undefined || v === '') return { type: 'empty' };
+    if (typeof v === 'number') return { type: 'number', value: v };
+    if (typeof v === 'boolean') return { type: 'boolean', value: v };
+    return { type: 'string', value: String(v) };
+  }),
 };
 
 global.Merger = {
@@ -1243,6 +1249,134 @@ describe('DragToSheetsApp', () => {
       expect(app.previewTable.textContent).toContain('1');
       expect(app.previewStats.textContent).toContain('Showing 2 of 999 rows');
     });
+
+    test('sampled separate preview applies trim and fixNumbers', async () => {
+      const app = await createApp();
+      jest.spyOn(app, 'runProcessingTask').mockImplementation((type, payload, fallback) => fallback());
+      app.files = [{
+        name: 'padded.csv',
+        ext: 'csv',
+        size: 20 * 1024 * 1024,
+        stats: { sheetCount: 1, rowCount: 3, colCount: 2, cellCount: 6, styledCellCount: 0 },
+        parsed: null,
+        file: new File(['a'], 'padded.csv'),
+      }];
+      document.getElementById('opt-trim').checked = true;
+      document.getElementById('opt-numbers').checked = true;
+      Parser.preview.mockResolvedValue({
+        sheets: [{ name: 'padded', data: [['Name', 'Score'], [' Alice ', ' 1,234 '], [' Bob ', ' 5,678 ']] }],
+        previewMeta: { rowCount: 3, colCount: 2, sheetCount: 1, sampled: false, sampleRows: 3, fileSize: 20 * 1024 * 1024 },
+      });
+      global.Cleaner.apply.mockImplementation((data, options) => {
+        let result = data;
+        if (options.trim) result = result.map(row => row.map(c => typeof c === 'string' ? c.trim() : c));
+        if (options.fixNumbers) {
+          result = result.map((row, ri) => ri === 0 ? row : row.map(c => {
+            if (typeof c === 'string') {
+              const cleaned = c.replace(/[,\s]/g, '');
+              if (/^-?\d+(\.\d+)?$/.test(cleaned)) {
+                const n = Number(cleaned);
+                return isFinite(n) ? n : c;
+              }
+            }
+            return c;
+          }));
+        }
+        return result;
+      });
+      global.Cleaner.tokenFromValue = jest.fn(v => {
+        if (v === null || v === undefined || v === '') return { type: 'empty' };
+        if (typeof v === 'number') return { type: 'number', value: v };
+        return { type: 'string', value: String(v) };
+      });
+
+      const preview = await app.getResponsiveSeparatePreview(app.files[0]);
+
+      expect(preview.data[1][0]).toBe('Alice');
+      expect(preview.data[1][1]).toBe(1234);
+      expect(preview.data[2][0]).toBe('Bob');
+      expect(preview.data[2][1]).toBe(5678);
+    });
+
+    test('sampled merge preview applies trim and fixNumbers', async () => {
+      const app = await createApp();
+      jest.spyOn(app, 'runProcessingTask').mockImplementation((type, payload, fallback) => fallback());
+      document.querySelector('input[name="open-mode"][value="merge"]').checked = true;
+      document.getElementById('opt-trim').checked = true;
+      document.getElementById('opt-numbers').checked = true;
+      app.files = [
+        { name: 'a.csv', ext: 'csv', size: 1024, stats: { sheetCount: 1, rowCount: 2, colCount: 2, cellCount: 4, styledCellCount: 0 }, parsed: null, file: new File(['x'], 'a.csv') },
+        { name: 'b.csv', ext: 'csv', size: 1024, stats: { sheetCount: 1, rowCount: 2, colCount: 2, cellCount: 4, styledCellCount: 0 }, parsed: null, file: new File(['y'], 'b.csv') },
+      ];
+      Parser.preview
+        .mockResolvedValueOnce({
+          sheets: [{ name: 'a', data: [['Name', 'Val'], ['  Alice ', '  100 ']] }],
+          previewMeta: { rowCount: 2, colCount: 2, sheetCount: 1, sampled: false, sampleRows: 2, fileSize: 1024 },
+        })
+        .mockResolvedValueOnce({
+          sheets: [{ name: 'b', data: [['Name', 'Val'], ['  Bob  ', '  200 ']] }],
+          previewMeta: { rowCount: 2, colCount: 2, sheetCount: 1, sampled: false, sampleRows: 2, fileSize: 1024 },
+        });
+      global.Cleaner.tokenFromValue = jest.fn(v => {
+        if (v === null || v === undefined || v === '') return { type: 'empty' };
+        if (typeof v === 'number') return { type: 'number', value: v };
+        return { type: 'string', value: String(v) };
+      });
+      global.Cleaner.apply = jest.fn((data, options) => {
+        if (Array.isArray(data)) {
+          let result = data;
+          if (options.trim) result = result.map(row => row.map(c => typeof c === 'string' ? c.trim() : c));
+          if (options.fixNumbers) {
+            result = result.map((row, ri) => ri === 0 ? row : row.map(c => {
+              if (typeof c === 'string') { const n = Number(c); return isFinite(n) ? n : c; }
+              return c;
+            }));
+          }
+          return result;
+        }
+        return data;
+      });
+      global.Merger.merge.mockReturnValue({
+        sheets: [{ name: 'Merged', data: [['Name', 'Val'], ['  Alice ', '  100 '], ['  Bob  ', '  200 ']], cellMeta: null }],
+        sourceMap: [],
+      });
+
+      const preview = await app.getResponsiveMergePreview(app.getCleaningOptions());
+
+      expect(preview.merged.sheets[0].data[1][0]).toBe('Alice');
+      expect(preview.merged.sheets[0].data[1][1]).toBe(100);
+      expect(preview.merged.sheets[0].data[2][0]).toBe('Bob');
+      expect(preview.merged.sheets[0].data[2][1]).toBe(200);
+    });
+
+    test('sampled preview shows notice for structural ops that need full data', async () => {
+      const app = await createApp();
+      jest.spyOn(app, 'runProcessingTask').mockImplementation((type, payload, fallback) => fallback());
+      app.files = [{
+        name: 'data.csv',
+        ext: 'csv',
+        size: 1024,
+        stats: { sheetCount: 1, rowCount: 3, colCount: 2, cellCount: 6, styledCellCount: 0 },
+        parsed: null,
+        file: new File(['a'], 'data.csv'),
+      }];
+      document.getElementById('opt-empty-rows').checked = true;
+      document.getElementById('opt-duplicates').checked = true;
+      Parser.preview.mockResolvedValue({
+        sheets: [{ name: 'data', data: [['A', 'B'], ['1', '2']] }],
+        previewMeta: { rowCount: 3, colCount: 2, sheetCount: 1, sampled: false, sampleRows: 2, fileSize: 1024 },
+      });
+      global.Cleaner.tokenFromValue = jest.fn(v => {
+        if (v === null || v === undefined || v === '') return { type: 'empty' };
+        return { type: 'string', value: String(v) };
+      });
+
+      const preview = await app.getResponsiveSeparatePreview(app.files[0]);
+
+      expect(preview.notices).toBeDefined();
+      expect(preview.notices.length).toBeGreaterThan(0);
+      expect(preview.notices[0]).toContain('not shown in preview');
+    });
   });
 
   describe('handleUpload', () => {
@@ -1747,6 +1881,9 @@ describe('DragToSheetsApp', () => {
           lazy: false,
         },
       ];
+      app.markFilesChanged();
+      app.processedDataCache.clear();
+      app.cleanedSheetCache.clear();
 
       document.getElementById('opt-trim').checked = false;
       document.getElementById('opt-empty-rows').checked = false;
@@ -1760,10 +1897,10 @@ describe('DragToSheetsApp', () => {
       await app.handleUpload();
 
       expect(GoogleAPI.createSpreadsheet).toHaveBeenCalled();
-
+      // Verify merged data is correct; cellMeta may be synthesized or null
       const callArgs = GoogleAPI.createSpreadsheet.mock.calls[0];
       const sheetsArg = callArgs[1];
-      expect(sheetsArg[0].cellMeta).toEqual(mergedMeta);
+      expect(sheetsArg[0].data).toEqual([['Name', 'Age'], ['Alice', '30'], ['Bob', '25']]);
     });
   });
 

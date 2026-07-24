@@ -152,30 +152,20 @@ const Merger = (() => {
 
       for (let i = 1; i < rowCount; i++) {
         const srcRow = sheetData[i];
+        const srcMetaRow = sheetMeta && sheetMeta[i];
         const newRow = new Array(headerLen);
         for (let h = 0; h < headerLen; h++) newRow[h] = '';
+        const newMetaRow = new Array(headerLen);
+        for (let h = 0; h < headerLen; h++) newMetaRow[h] = { type: 'empty' };
         const srcLen = Math.min(srcRow.length, colMapLen);
         for (let j = 0; j < srcLen; j++) {
           const targetIdx = colMap[j];
           if (targetIdx >= 0 && newRow[targetIdx] === '') {
             newRow[targetIdx] = srcRow[j];
+            newMetaRow[targetIdx] = (srcMetaRow ? srcMetaRow[j] : null) || { type: 'empty' };
           }
         }
         mergedData[writeIdx] = newRow;
-
-        // Build cellMeta row with same column mapping
-        const newMetaRow = new Array(headerLen);
-        for (let h = 0; h < headerLen; h++) newMetaRow[h] = { type: 'empty' };
-        if (sheetMeta && sheetMeta[i]) {
-          const srcMetaRow = sheetMeta[i];
-          const metaSrcLen = Math.min(srcMetaRow.length, colMapLen);
-          for (let j = 0; j < metaSrcLen; j++) {
-            const targetIdx = colMap[j];
-            if (targetIdx >= 0 && newMetaRow[targetIdx].type === 'empty') {
-              newMetaRow[targetIdx] = srcMetaRow[j] || { type: 'empty' };
-            }
-          }
-        }
         mergedCellMeta[writeIdx] = newMetaRow;
 
         if (wantSourceMap) {

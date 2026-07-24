@@ -1915,6 +1915,139 @@ describe('GoogleAPI', () => {
   });
 
   // ================================================================
+  //  tokenFromCellDataFallback & rowComparisonKeyFallback
+  // ================================================================
+
+  describe('tokenFromCellDataFallback', () => {
+    test('includes formatType for DATE token', () => {
+      const cellData = {
+        userEnteredValue: { numberValue: 45306 },
+        effectiveFormat: { numberFormat: { type: 'DATE' } },
+      };
+      const token = GoogleAPI.tokenFromCellDataFallback(cellData);
+      expect(token).toEqual({ type: 'date', value: 45306, formatType: 'DATE' });
+    });
+
+    test('includes formatType for TIME token', () => {
+      const cellData = {
+        userEnteredValue: { numberValue: 0.5 },
+        effectiveFormat: { numberFormat: { type: 'TIME' } },
+      };
+      const token = GoogleAPI.tokenFromCellDataFallback(cellData);
+      expect(token).toEqual({ type: 'date', value: 0.5, formatType: 'TIME' });
+    });
+
+    test('includes formatType for DATE_TIME token', () => {
+      const cellData = {
+        userEnteredValue: { numberValue: 45306.5 },
+        effectiveFormat: { numberFormat: { type: 'DATE_TIME' } },
+      };
+      const token = GoogleAPI.tokenFromCellDataFallback(cellData);
+      expect(token).toEqual({ type: 'date', value: 45306.5, formatType: 'DATE_TIME' });
+    });
+  });
+
+  describe('rowComparisonKeyFallback', () => {
+    test('includes formatType for date tokens', () => {
+      const tokens = [
+        { type: 'date', value: 45306, formatType: 'DATE' },
+      ];
+      const key = GoogleAPI.rowComparisonKeyFallback(tokens, false, []);
+      expect(key).toBe('date\x0045306\x00DATE');
+    });
+
+    test('DATE vs TIME with equal serial value produce distinct keys', () => {
+      const dateTokens = [{ type: 'date', value: 25569, formatType: 'DATE' }];
+      const timeTokens = [{ type: 'date', value: 25569, formatType: 'TIME' }];
+      const dateKey = GoogleAPI.rowComparisonKeyFallback(dateTokens, false, []);
+      const timeKey = GoogleAPI.rowComparisonKeyFallback(timeTokens, false, []);
+      expect(dateKey).not.toBe(timeKey);
+      expect(dateKey).toBe('date\x0025569\x00DATE');
+      expect(timeKey).toBe('date\x0025569\x00TIME');
+    });
+
+    test('date tokens without formatType do not append extra segment', () => {
+      const tokens = [
+        { type: 'date', value: 100 },
+      ];
+      const key = GoogleAPI.rowComparisonKeyFallback(tokens, false, []);
+      expect(key).toBe('date\x00100');
+    });
+  });
+
+  // ================================================================
+  //  Bounded typed writes
+  // ================================================================
+
+  describe('buildTypedUpdateRows chunking', () => {
+    function mockFetchSequence(...responses) {
+      for (const resp of responses) {
+        global.fetch.mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve(resp),
+        });
+      }
+    }
+
+    test('large typed merge chunked into multiple bounded requests', async () => {
+      const rows = [];
+      for (let ri = 0; ri < 600; ri++) {
+        const row = [];
+        for (let ci = 0; ci < 100; ci++) {
+          row.push(`r${ri}c${ci}`);
+        }
+        rows.push(row);
+      }
+
+      const cellMeta = rows.map((row) =>
+        row.map((v) => ({ type: 'string', value: String(v) }))
+      );
+
+      mockFetchSequence(
+        { spreadsheetId: 's1', spreadsheetUrl: 'url', sheets: [{ properties: { sheetId: 0, title: 'Big' } }] },
+        { sheets: [{ properties: { sheetId: 0, title: 'Big' } }] },
+        {},  // batchUpdate block 1
+        {},  // batchUpdate block 2
+        {}   // format
+      );
+
+      await GoogleAPI.createSpreadsheet('Big', [
+        { name: 'Big', data: rows, cellMeta },
+      ]);
+
+      const batchCalls = global.fetch.mock.calls.filter((call) =>
+        call[0].includes('batchUpdate')
+      );
+      // At least 2 batchUpdate calls (typed chunks) + possibly format
+      expect(batchCalls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    test('pure CSV merge uses RAW path not typed', async () => {
+      mockFetchSequence(
+        { spreadsheetId: 's1', spreadsheetUrl: 'url', sheets: [{ properties: { sheetId: 0, title: 'Sheet1' } }] },
+        {},  // RAW values write
+        {}   // format
+      );
+
+      await GoogleAPI.createSpreadsheet('CSVOnly', [
+        { name: 'Sheet1', data: [['A', 'B'], ['1', '2']] },  // no cellMeta
+        { name: 'Sheet2', data: [['C', 'D']] },  // no cellMeta
+      ]);
+
+      const valueCalls = global.fetch.mock.calls.filter((call) =>
+        call[0].includes('values:batchUpdate')
+      );
+      expect(valueCalls).toHaveLength(1);
+
+      const batchCalls = global.fetch.mock.calls.filter((call) =>
+        call[0].includes('batchUpdate') && !call[0].includes('values:batchUpdate')
+      );
+      // Only format call, no typed updateCells
+      expect(batchCalls).toHaveLength(1);
+    });
+  });
+
+  // ================================================================
   //  applyFormatting
   // ================================================================
 
