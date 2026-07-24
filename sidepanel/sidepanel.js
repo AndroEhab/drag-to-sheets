@@ -902,7 +902,8 @@
       this.loadingBar = document.getElementById('loading-panel-bar');
       this.loadingSpinner = document.getElementById('loading-spinner');
       this.loadingText = document.getElementById('loading-text');
-      this.loadingSrAnnounce = document.getElementById('loading-sr-announce');
+      this.loadingSrStatus = document.getElementById('loading-sr-status');
+      this.loadingSrAlert = document.getElementById('loading-sr-alert');
       this.urlToggle = document.getElementById('url-toggle');
       this.urlBar = document.getElementById('url-bar');
       this.urlInput = document.getElementById('url-input');
@@ -3156,7 +3157,7 @@
       }, 800);
     }
 
-    setStatus(message, type = 'info') {
+    setStatus(message, type = 'info', { announce = true } = {}) {
       this.loadingText.textContent = message;
 
       // Reset all modifier classes
@@ -3177,24 +3178,40 @@
         else if (type === 'error') this.loadingPanel.classList.add('loading-panel--error');
       }
 
-      this._announceStatus(message, type);
+      if (announce) {
+        this._announceStatus(message, type);
+      } else {
+        this._lastAnnouncedMessage = '';
+        this._lastAnnouncedTime = 0;
+      }
     }
 
     _announceStatus(message, type) {
-      // info is used for internal restore messages and the initial hint — skip
-      if (type === 'info') return;
+      const now = Date.now();
 
-      const el = this.loadingSrAnnounce;
-      if (!el) return;
+      if (
+        message === this._lastAnnouncedMessage &&
+        type === this._lastAnnouncedType &&
+        now - this._lastAnnouncedTime < 200
+      ) {
+        return;
+      }
 
-      // Avoid re-announcing the same error consecutively
-      if (type === 'error' && message === this._lastAnnouncedMessage && this._lastAnnouncedType === 'error') return;
+      const statusEl = this.loadingSrStatus;
+      const alertEl = this.loadingSrAlert;
+      if (!statusEl || !alertEl) return;
 
-      el.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
-      el.textContent = message;
+      if (type === 'error') {
+        statusEl.textContent = '';
+        alertEl.textContent = message;
+      } else {
+        alertEl.textContent = '';
+        statusEl.textContent = message;
+      }
 
       this._lastAnnouncedMessage = message;
       this._lastAnnouncedType = type;
+      this._lastAnnouncedTime = now;
     }
 
     // ---- Helpers ----

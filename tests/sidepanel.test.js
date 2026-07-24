@@ -167,7 +167,8 @@ function setupDOM() {
       <div class="loading-panel-body">
         <div id="loading-spinner" class="loading-spinner hidden"></div>
         <span id="loading-text" class="loading-text"></span>
-        <span id="loading-sr-announce" class="sr-only" aria-live="polite" aria-atomic="true"></span>
+        <span id="loading-sr-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></span>
+        <span id="loading-sr-alert" class="sr-only" role="alert" aria-live="assertive" aria-atomic="true"></span>
       </div>
     </div>
     <button id="upload-btn" disabled>Open in Sheets</button>
@@ -1806,81 +1807,131 @@ describe('DragToSheetsApp', () => {
     });
 
     describe('accessibility announcements', () => {
-      test('announces loading message via live region', async () => {
-        const app = await createApp();
-        const el = app.loadingSrAnnounce;
+      const expectStatus = (app, msg) => {
+        expect(app.loadingSrStatus.textContent).toBe(msg);
+      };
+      const expectAlert = (app, msg) => {
+        expect(app.loadingSrAlert.textContent).toBe(msg);
+      };
+      const expectStatusEmpty = (app) => expectStatus(app, '');
+      const expectAlertEmpty = (app) => expectAlert(app, '');
 
+      test('loading populates polite status region', async () => {
+        const app = await createApp();
         app.setStatus('Parsing files…', 'loading');
 
-        expect(el.getAttribute('aria-live')).toBe('polite');
-        expect(el.textContent).toBe('Parsing files…');
+        expectStatus(app, 'Parsing files…');
+        expectAlertEmpty(app);
       });
 
-      test('announces success message via live region', async () => {
+      test('success populates polite status region', async () => {
         const app = await createApp();
-        const el = app.loadingSrAnnounce;
-
         app.setStatus('All files ready', 'success');
 
-        expect(el.getAttribute('aria-live')).toBe('polite');
-        expect(el.textContent).toBe('All files ready');
+        expectStatus(app, 'All files ready');
+        expectAlertEmpty(app);
       });
 
-      test('announces warning message via live region', async () => {
+      test('warning populates polite status region', async () => {
         const app = await createApp();
-        const el = app.loadingSrAnnounce;
-
         app.setStatus('Enter a valid URL', 'warning');
 
-        expect(el.getAttribute('aria-live')).toBe('polite');
-        expect(el.textContent).toBe('Enter a valid URL');
+        expectStatus(app, 'Enter a valid URL');
+        expectAlertEmpty(app);
       });
 
-      test('announces error message with assertive priority', async () => {
+      test('error populates assertive alert region', async () => {
         const app = await createApp();
-        const el = app.loadingSrAnnounce;
-
         app.setStatus('Upload failed', 'error');
 
-        expect(el.getAttribute('aria-live')).toBe('assertive');
-        expect(el.textContent).toBe('Upload failed');
+        expectAlert(app, 'Upload failed');
+        expectStatusEmpty(app);
       });
 
-      test('does not announce info type messages', async () => {
+      test('aria-live and roles remain static', async () => {
         const app = await createApp();
-        const el = app.loadingSrAnnounce;
 
-        app.setStatus('Restored 3 files', 'info');
+        expect(app.loadingSrStatus.getAttribute('aria-live')).toBe('polite');
+        expect(app.loadingSrStatus.getAttribute('role')).toBe('status');
+        expect(app.loadingSrAlert.getAttribute('aria-live')).toBe('assertive');
+        expect(app.loadingSrAlert.getAttribute('role')).toBe('alert');
 
-        expect(el.textContent).toBe('');
+        app.setStatus('Working…', 'loading');
+        expect(app.loadingSrStatus.getAttribute('aria-live')).toBe('polite');
+
+        app.setStatus('Error!', 'error');
+        expect(app.loadingSrAlert.getAttribute('aria-live')).toBe('assertive');
       });
 
-      test('does not re-announce the same error twice', async () => {
+      test('announces restored-file counts politely', async () => {
         const app = await createApp();
-        const el = app.loadingSrAnnounce;
+        app.setStatus('Restored 3 files from last session', 'info');
 
-        app.setStatus('Upload failed', 'error');
-        expect(el.textContent).toBe('Upload failed');
-
-        el.textContent = '';
-
-        app.setStatus('Upload failed', 'error');
-
-        expect(el.textContent).toBe('');
+        expectStatus(app, 'Restored 3 files from last session');
+        expectAlertEmpty(app);
       });
 
-      test('re-announces same error after a different status clears it', async () => {
+      test('announces Re-add to continue politely', async () => {
         const app = await createApp();
-        const el = app.loadingSrAnnounce;
+        app.setStatus('Re-add to continue: "old.csv"', 'info');
+
+        expectStatus(app, 'Re-add to continue: "old.csv"');
+        expectAlertEmpty(app);
+      });
+
+      test('announces large-batch message politely', async () => {
+        const app = await createApp();
+        app.setStatus('Large batch (50 files, 200 MB) was not restored', 'info');
+
+        expectStatus(app, 'Large batch (50 files, 200 MB) was not restored');
+        expectAlertEmpty(app);
+      });
+
+      test('initial static hint is not automatically announced', async () => {
+        const app = await createApp();
+
+        expect(app.loadingSrStatus.textContent).toBe('');
+        expect(app.loadingSrAlert.textContent).toBe('');
+      });
+
+      test('inactive region is cleared when the other is used', async () => {
+        const app = await createApp();
 
         app.setStatus('Upload failed', 'error');
-        expect(el.textContent).toBe('Upload failed');
+        expectAlert(app, 'Upload failed');
 
-        app.setStatus('Ready', 'success');
-        expect(el.textContent).toBe('Ready');
+        app.setStatus('Retrying…', 'loading');
+        expectStatus(app, 'Retrying…');
+        expectAlertEmpty(app);
 
-        app.setStatus('Upload failed', 'error');
-        expect(el.textContent).toBe('Upload failed');
+        app.setStatus('Failed again', 'error');
+        expectAlert(app, 'Failed again');
+        expectStatusEmpty(app);
+      });
+
+      test('same error after a retry is announced again', async () => {
+        const app = await createApp();
+
+        app.setStatus('Network error', 'error');
+        expectAlert(app, 'Network error');
+
+        app.setStatus('Retrying…', 'loading');
+        app.setStatus('Network error', 'error');
+        expectAlert(app, 'Network error');
+      });
+
+      test('visual text, spinner, and modifier classes are unchanged', async () => {
+        const app = await createApp();
+
+        app.setStatus('Working…', 'loading');
+        expect(app.loadingText.textContent).toBe('Working…');
+        expect(app.loadingPanel.classList.contains('loading-panel--active')).toBe(true);
+        expect(app.loadingSpinner.classList.contains('hidden')).toBe(false);
+
+        app.setStatus('Done', 'success');
+        expect(app.loadingText.textContent).toBe('Done');
+        expect(app.loadingPanel.classList.contains('loading-panel--success')).toBe(true);
+        expect(app.loadingSpinner.classList.contains('hidden')).toBe(true);
       });
     });
   });
