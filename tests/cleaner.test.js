@@ -51,7 +51,7 @@ describe('Cleaner', () => {
         ['', ''],
         ['Bob', '25'],
       ];
-      expect(Cleaner.removeEmptyRows(data)).toEqual([
+      expect(Cleaner.removeEmptyRows(data).data).toEqual([
         ['Name', 'Age'],
         ['Alice', '30'],
         ['Bob', '25'],
@@ -63,7 +63,7 @@ describe('Cleaner', () => {
         ['', ''],
         ['Alice', '30'],
       ];
-      const result = Cleaner.removeEmptyRows(data);
+      const result = Cleaner.removeEmptyRows(data).data;
       expect(result[0]).toEqual(['', '']);
       expect(result).toHaveLength(2);
     });
@@ -74,7 +74,7 @@ describe('Cleaner', () => {
         ['  ', '\t'],
         ['Alice'],
       ];
-      expect(Cleaner.removeEmptyRows(data)).toEqual([
+      expect(Cleaner.removeEmptyRows(data).data).toEqual([
         ['Name'],
         ['Alice'],
       ]);
@@ -86,16 +86,16 @@ describe('Cleaner', () => {
         [''],
         [''],
       ];
-      expect(Cleaner.removeEmptyRows(data)).toEqual([['Header']]);
+      expect(Cleaner.removeEmptyRows(data).data).toEqual([['Header']]);
     });
 
     test('handles empty data', () => {
-      expect(Cleaner.removeEmptyRows([])).toEqual([]);
+      expect(Cleaner.removeEmptyRows([]).data).toEqual([]);
     });
 
     test('handles single header row', () => {
       const data = [['Name', 'Age']];
-      expect(Cleaner.removeEmptyRows(data)).toEqual([['Name', 'Age']]);
+      expect(Cleaner.removeEmptyRows(data).data).toEqual([['Name', 'Age']]);
     });
   });
 
@@ -108,7 +108,7 @@ describe('Cleaner', () => {
         ['Alice', '', '30'],
         ['Bob', '', '25'],
       ];
-      expect(Cleaner.removeEmptyColumns(data)).toEqual([
+      expect(Cleaner.removeEmptyColumns(data).data).toEqual([
         ['Name', 'Age'],
         ['Alice', '30'],
         ['Bob', '25'],
@@ -120,7 +120,7 @@ describe('Cleaner', () => {
         ['Name', '  ', 'Age'],
         ['Alice', ' ', '30'],
       ];
-      expect(Cleaner.removeEmptyColumns(data)).toEqual([
+      expect(Cleaner.removeEmptyColumns(data).data).toEqual([
         ['Name', 'Age'],
         ['Alice', '30'],
       ]);
@@ -131,7 +131,7 @@ describe('Cleaner', () => {
         ['Name', '', 'Age'],
         ['Alice', 'x', '30'],
       ];
-      expect(Cleaner.removeEmptyColumns(data)).toEqual([
+      expect(Cleaner.removeEmptyColumns(data).data).toEqual([
         ['Name', '', 'Age'],
         ['Alice', 'x', '30'],
       ]);
@@ -142,12 +142,12 @@ describe('Cleaner', () => {
         ['A', 'B', 'C'],
         ['1'],
       ];
-      const result = Cleaner.removeEmptyColumns(data);
+      const result = Cleaner.removeEmptyColumns(data).data;
       expect(result[0]).toEqual(['A', 'B', 'C']);
     });
 
     test('handles empty data', () => {
-      expect(Cleaner.removeEmptyColumns([])).toEqual([]);
+      expect(Cleaner.removeEmptyColumns([]).data).toEqual([]);
     });
 
     test('removes all columns if all are empty', () => {
@@ -155,7 +155,7 @@ describe('Cleaner', () => {
         ['', ''],
         ['', ''],
       ];
-      expect(Cleaner.removeEmptyColumns(data)).toEqual([[], []]);
+      expect(Cleaner.removeEmptyColumns(data).data).toEqual([[], []]);
     });
   });
 
@@ -169,7 +169,7 @@ describe('Cleaner', () => {
         ['Bob', '25'],
         ['Alice', '30'],
       ];
-      expect(Cleaner.removeDuplicateRows(data)).toEqual([
+      expect(Cleaner.removeDuplicateRows(data).data).toEqual([
         ['Name', 'Age'],
         ['Alice', '30'],
         ['Bob', '25'],
@@ -181,7 +181,7 @@ describe('Cleaner', () => {
         ['Name'],
         ['Name'],
       ];
-      const result = Cleaner.removeDuplicateRows(data);
+      const result = Cleaner.removeDuplicateRows(data).data;
       expect(result).toEqual([['Name'], ['Name']]);
     });
 
@@ -191,7 +191,7 @@ describe('Cleaner', () => {
         ['Alice'],
         ['Bob'],
       ];
-      expect(Cleaner.removeDuplicateRows(data)).toEqual(data);
+      expect(Cleaner.removeDuplicateRows(data).data).toEqual(data);
     });
 
     test('handles multiple duplicates of the same row', () => {
@@ -202,7 +202,7 @@ describe('Cleaner', () => {
         ['A'],
         ['B'],
       ];
-      expect(Cleaner.removeDuplicateRows(data)).toEqual([
+      expect(Cleaner.removeDuplicateRows(data).data).toEqual([
         ['H'],
         ['A'],
         ['B'],
@@ -211,11 +211,11 @@ describe('Cleaner', () => {
 
     test('handles single row (header only)', () => {
       const data = [['Name']];
-      expect(Cleaner.removeDuplicateRows(data)).toEqual([['Name']]);
+      expect(Cleaner.removeDuplicateRows(data).data).toEqual([['Name']]);
     });
 
     test('handles empty data', () => {
-      expect(Cleaner.removeDuplicateRows([])).toEqual([]);
+      expect(Cleaner.removeDuplicateRows([]).data).toEqual([]);
     });
   });
 
@@ -291,7 +291,7 @@ describe('Cleaner', () => {
         ['0'],
         ['-7'],
       ];
-      const result = Cleaner.fixNumberFormatting(data);
+      const result = Cleaner.fixNumberFormatting(data).data;
       // All numeric-looking strings become numbers (restored behavior)
       expect(result[1][0]).toBe(42);
       expect(result[2][0]).toBe(0);
@@ -304,7 +304,7 @@ describe('Cleaner', () => {
         ['3.14'],
         ['-0.5'],
       ];
-      const result = Cleaner.fixNumberFormatting(data);
+      const result = Cleaner.fixNumberFormatting(data).data;
       expect(result[1][0]).toBe(3.14);
       expect(result[2][0]).toBe(-0.5);
     });
@@ -315,7 +315,7 @@ describe('Cleaner', () => {
         ['1,000'],
         ['1,234,567'],
       ];
-      const result = Cleaner.fixNumberFormatting(data);
+      const result = Cleaner.fixNumberFormatting(data).data;
       expect(result[1][0]).toBe(1000);
       expect(result[2][0]).toBe(1234567);
     });
@@ -325,7 +325,7 @@ describe('Cleaner', () => {
         ['123', '456'],
         ['7', '8'],
       ];
-      const result = Cleaner.fixNumberFormatting(data);
+      const result = Cleaner.fixNumberFormatting(data).data;
       expect(result[0]).toEqual(['123', '456']);
       expect(result[1]).toEqual([7, 8]);
     });
@@ -338,7 +338,7 @@ describe('Cleaner', () => {
         ['$100'],
         ['1.2.3'],
       ];
-      const result = Cleaner.fixNumberFormatting(data);
+      const result = Cleaner.fixNumberFormatting(data).data;
       expect(result[1][0]).toBe('hello');
       expect(result[2][0]).toBe('12abc');
       expect(result[3][0]).toBe('$100');
@@ -347,26 +347,26 @@ describe('Cleaner', () => {
 
     test('leaves empty strings unchanged', () => {
       const data = [['Col'], ['']];
-      const result = Cleaner.fixNumberFormatting(data);
+      const result = Cleaner.fixNumberFormatting(data).data;
       expect(result[1][0]).toBe('');
     });
 
     test('handles non-string cells', () => {
       const data = [['Col'], [42]];
-      const result = Cleaner.fixNumberFormatting(data);
+      const result = Cleaner.fixNumberFormatting(data).data;
       expect(result[1][0]).toBe(42);
     });
 
     test('handles whitespace around numbers', () => {
       const data = [['Col'], [' 42 ']];
-      const result = Cleaner.fixNumberFormatting(data);
+      const result = Cleaner.fixNumberFormatting(data).data;
       // fixNumbers internally trims before checking → converts to number
       expect(result[1][0]).toBe(42);
     });
 
     test('handles single row (header only)', () => {
       const data = [['Value']];
-      expect(Cleaner.fixNumberFormatting(data)).toEqual([['Value']]);
+      expect(Cleaner.fixNumberFormatting(data).data).toEqual([['Value']]);
     });
   });
 
