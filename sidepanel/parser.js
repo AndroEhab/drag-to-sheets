@@ -196,6 +196,7 @@ const Parser = (() => {
       sheets: [{ name: sheetName, data: normalized.rows }],
       previewMeta: {
         rowCount: exactRows ? parsedRows.length : null,
+        dataRowCount: exactRows ? Math.max(parsedRows.length - 1, 0) : null,
         colCount: exactRows
           ? parsedRows.reduce((max, row) => Math.max(max, row.length), 0)
           : normalized.colCount,
@@ -256,23 +257,32 @@ const Parser = (() => {
       normalized.rows.pop();
       cellMeta.pop();
     }
-    const fullRef = sheet?.['!fullref'] || sheet?.['!ref'];
+    // Compute whole-workbook totals across every sheet
+    let totalRows = 0;
+    let totalDataRows = 0;
+    let maxColsAll = 0;
+    let allExact = true;
 
-    let rowCount = normalized.rows.length;
-    let colCount = normalized.colCount;
-    if (fullRef) {
-      const range = XLSX.utils.decode_range(fullRef);
-      rowCount = range.e.r - range.s.r + 1;
-      colCount = range.e.c - range.s.c + 1;
+    for (const sheetName of workbook.SheetNames) {
+      const s = workbook.Sheets[sheetName];
+      const ref = s?.['!fullref'] || s?.['!ref'];
+      if (!ref) { allExact = false; break; }
+      const range = XLSX.utils.decode_range(ref);
+      const sheetRows = range.e.r - range.s.r + 1;
+      const sheetCols = range.e.c - range.s.c + 1;
+      totalRows += sheetRows;
+      totalDataRows += Math.max(sheetRows - 1, 0);
+      maxColsAll = Math.max(maxColsAll, sheetCols);
     }
 
     const result = {
       sheets: [{ name, data: normalized.rows, cellMeta }],
       previewMeta: {
-        rowCount,
-        colCount,
+        rowCount: allExact ? totalRows : null,
+        dataRowCount: allExact ? totalDataRows : null,
+        colCount: allExact ? maxColsAll : null,
         sheetCount: workbook.SheetNames.length,
-        sampled: rowCount > normalized.rows.length,
+        sampled: (allExact ? totalRows : normalized.rows.length) > normalized.rows.length,
         sampleRows: normalized.rows.length,
         fileSize: options.fileSize || 0,
       },

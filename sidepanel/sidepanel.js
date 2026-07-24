@@ -436,14 +436,21 @@
 
     buildStatsFromPreview(preview) {
       const meta = preview?.previewMeta || {};
-      const rowCount = meta.rowCount || preview?.sheets?.[0]?.data?.length || 0;
-      const colCount = meta.colCount || preview?.sheets?.[0]?.data?.[0]?.length || 0;
+      const rowCount = meta.rowCount ?? null;
+      const dataRowCount = meta.dataRowCount ?? null;
+      const colCount = meta.colCount ?? null;
+      const sheetCount = meta.sheetCount ?? null;
+
+      if (rowCount === null || dataRowCount === null || colCount === null || sheetCount === null) {
+        return null;
+      }
+
       return {
-        sheetCount: meta.sheetCount || preview?.sheets?.length || 1,
+        sheetCount,
         rowCount,
-        dataRowCount: Math.max(rowCount - 1, 0),
+        dataRowCount,
         colCount,
-        cellCount: rowCount && colCount ? rowCount * colCount : 0,
+        cellCount: rowCount * colCount,
         styledCellCount: 0,
       };
     }
@@ -475,9 +482,10 @@
         const preview = {
           sheets: [previewSheet],
           previewMeta: {
-            rowCount: item.stats?.rowCount || data.length,
-            colCount: item.stats?.colCount || colCount,
-            sheetCount: item.stats?.sheetCount || item.parsed.sheets.length,
+            rowCount: item.stats?.rowCount ?? data.length,
+            dataRowCount: item.stats?.dataRowCount ?? Math.max(data.length - 1, 0),
+            colCount: item.stats?.colCount ?? colCount,
+            sheetCount: item.stats?.sheetCount ?? item.parsed.sheets.length,
             sampled: data.length > sampledRows.length,
             sampleRows: sampledRows.length,
             fileSize: this.getFileSize(item),
@@ -497,8 +505,9 @@
         () => Parser.preview(item.file, { sampleRows: 51 })
       );
       item.previewSample = preview;
-      if (!item.stats) {
-        item.stats = this.buildStatsFromPreview(preview);
+      const exactStats = this.buildStatsFromPreview(preview);
+      if (exactStats) {
+        item.stats = exactStats;
       }
       this._updateSummaryCards();
       return preview;

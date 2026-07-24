@@ -515,23 +515,116 @@ describe('DragToSheetsApp', () => {
       expect(document.getElementById('summary-rows').textContent).toBe('2');
     });
 
-    test('sample-preview hydration replaces dashes with real values', async () => {
+    test('small complete CSV through ensurePreviewSample replaces dashes with exact values', async () => {
       const app = await createApp();
-      // Start with lazy entry (no stats)
+      global.Parser.preview.mockResolvedValue({
+        sheets: [{ name: 'Sheet1', data: [['h'], ['v1'], ['v2']] }],
+        previewMeta: { rowCount: 3, dataRowCount: 2, colCount: 1, sheetCount: 1, sampled: false, sampleRows: 3, fileSize: 20 },
+      });
       app.files = [{ name: 'a.csv', parsed: null, lazy: true, file: new File(['h\nv1\nv2'], 'a.csv', { type: 'text/csv' }) }];
       app._updateSummaryCards();
       expect(document.getElementById('summary-rows').textContent).toBe('\u2014');
 
-      // Hydrate via preview sample (mocked to set stats)
-      const previewResult = {
-        sheets: [{ name: 'Sheet1', data: [['h'], ['v1'], ['v2']] }],
-        previewMeta: { rowCount: 3, colCount: 1, sheetCount: 1, sampled: false, sampleRows: 3, fileSize: 10 },
-      };
-      app.files[0].previewSample = previewResult;
-      app.files[0].stats = app.buildStatsFromPreview(previewResult);
-      app._updateSummaryCards();
+      await app.ensurePreviewSample(app.files[0]);
       expect(document.getElementById('summary-rows').textContent).toBe('2');
       expect(document.getElementById('summary-cols').textContent).toBe('1');
+    });
+
+    test('truncated CSV preview with rowCount null retains dashes', async () => {
+      const app = await createApp();
+      global.Parser.preview.mockResolvedValue({
+        sheets: [{ name: 'Sheet1', data: [['h'], ['v1'], ['v2']] }],
+        previewMeta: { rowCount: null, dataRowCount: null, colCount: 1, sheetCount: 1, sampled: true, sampleRows: 3, fileSize: 999999 },
+      });
+      app.files = [{ name: 'big.csv', parsed: null, lazy: true, file: new File(['h\nv1\nv2'], 'big.csv', { type: 'text/csv' }) }];
+      app._updateSummaryCards();
+      expect(document.getElementById('summary-rows').textContent).toBe('\u2014');
+
+      await app.ensurePreviewSample(app.files[0]);
+      expect(document.getElementById('summary-rows').textContent).toBe('\u2014');
+      expect(app.files[0].stats).toBeUndefined();
+    });
+
+    test('truncated sampled rows are not assigned to item.stats', async () => {
+      const app = await createApp();
+      global.Parser.preview.mockResolvedValue({
+        sheets: [{ name: 'Sheet1', data: [['h'], ['v1']] }],
+        previewMeta: { rowCount: null, dataRowCount: null, colCount: 2, sheetCount: 1, sampled: true, sampleRows: 2, fileSize: 999999 },
+      });
+      app.files = [{ name: 't.csv', parsed: null, lazy: true, file: new File(['h\nv1'], 't.csv', { type: 'text/csv' }) }];
+      await app.ensurePreviewSample(app.files[0]);
+      expect(app.files[0].stats).toBeUndefined();
+    });
+
+    test('multi-sheet Excel preview reports totals across all sheets', async () => {
+      const app = await createApp();
+      const parsed = {
+        sheets: [
+          { name: 'S1', data: [['h1'], ['v1'], ['v2']] },
+          { name: 'S2', data: [['h2'], ['v3'], ['v4'], ['v5']] },
+        ],
+      };
+      const stats = app.computeParsedStats(parsed);
+      app.files = [{ name: 'w.xlsx', parsed, stats, ext: 'xlsx' }];
+      app._updateSummaryCards();
+      // dataRowCount = (3-1)+(4-1) = 5; colCount = max(1,1) = 1
+      expect(document.getElementById('summary-rows').textContent).toBe('5');
+    });
+
+    test('full parsing after unknown preview replaces dashes with exact values', async () => {
+      const app = await createApp();
+      global.Parser.parse.mockResolvedValue({
+        sheets: [{ name: 'Sheet1', data: [['h'], ['v1'], ['v2'], ['v4']] }],
+      });
+      app.files = [{ name: 'a.csv', parsed: null, lazy: true, file: new File(['h\nv1\nv2'], 'a.csv', { type: 'text/csv' }) }];
+      app._updateSummaryCards();
+      expect(document.getElementById('summary-rows').textContent).toBe('\u2014');
+
+      await app.ensureParsedEntry(app.files[0]);
+      expect(document.getElementById('summary-rows').textContent).toBe('3');
+      expect(document.getElementById('summary-cols').textContent).toBe('1');
+    });
+
+    test('unknown preview metadata is not persisted as exact stats', async () => {
+      const app = await createApp();
+      const preview = {
+        sheets: [{ name: 'Sheet1', data: [['h'], ['v1']] }],
+        previewMeta: { rowCount: null, dataRowCount: null, colCount: null, sheetCount: null, sampled: true, sampleRows: 2, fileSize: 100 },
+      };
+      const result = app.buildStatsFromPreview(preview);
+      expect(result).toBeNull();
+    });
+
+    test('genuinely stats-only restored entry uses stored dataRowCount', async () => {
+      const app = await createApp();
+      app.files = [{ name: 'r.csv', parsed: null, stats: { sheetCount: 3, rowCount: 103, dataRowCount: 100, colCount: 12 } }];
+      app._updateSummaryCards();
+      expect(document.getElementById('summary-rows').textContent).toBe('100');
+      expect(document.getElementById('summary-cols').textContent).toBe('12');
+    });
+
+    test('exact zero values are accepted and do not fall through to sampled values', async () => {
+      const app = await createApp();
+      app.files = [{ name: 'e.csv', parsed: { sheets: [{ name: 'S1', data: [] }] }, stats: { rowCount: 0, dataRowCount: 0, colCount: 0, cellCount: 0, styledCellCount: 0 } }];
+      app._updateSummaryCards();
+      expect(document.getElementById('summary-rows').textContent).toBe('0');
+      expect(document.getElementById('summary-cols').textContent).toBe('0');
+    });
+
+    test('empty and header-only multi-sheet workbooks remain correct', async () => {
+      const app = await createApp();
+      const parsed = {
+        sheets: [
+          { name: 'S1', data: [] },
+          { name: 'S2', data: [['h']] },
+          { name: 'S3', data: [['h'], ['v1']] },
+        ],
+      };
+      const stats = app.computeParsedStats(parsed);
+      app.files = [{ name: 'mix.xlsx', parsed, stats, ext: 'xlsx' }];
+      app._updateSummaryCards();
+      // dataRowCount = 0 + 0 + 1 = 1
+      expect(document.getElementById('summary-rows').textContent).toBe('1');
     });
 
     test('clearing files hides the cards', async () => {
