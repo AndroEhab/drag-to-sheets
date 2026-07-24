@@ -112,11 +112,12 @@
             <input type="checkbox" id="opt-empty-cols">
             <span>Remove empty columns</span>
           </label>
-          <label class="checkbox-label">
-            <input type="checkbox" id="opt-duplicates">
-            <span>Remove duplicate rows</span>
-          </label>
-          <div id="dup-mode" class="dup-mode hidden">
+          <div class="dup-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="opt-duplicates">
+              <span>Remove duplicate rows</span>
+            </label>
+            <div id="dup-mode" class="dup-mode hidden">
             <label class="radio-label radio-sub">
               <input type="radio" name="dup-mode" value="keep-first" checked>
               <span>Keep first occurrence</span>
@@ -125,6 +126,7 @@
               <input type="radio" name="dup-mode" value="absolute">
               <span>Remove all instances</span>
             </label>
+          </div>
           </div>
           <div class="help-row">
             <label class="checkbox-label">

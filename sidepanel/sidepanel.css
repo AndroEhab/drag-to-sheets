@@ -882,6 +882,11 @@ body {
 
 /* ---- Duplicate Mode Sub-options ---- */
 
+.dup-group {
+  display: flex;
+  flex-direction: column;
+}
+
 .dup-mode {
   margin-left: 24px;
   margin-top: 2px;

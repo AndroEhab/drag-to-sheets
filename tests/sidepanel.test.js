@@ -144,10 +144,12 @@ function setupDOM() {
         <input type="checkbox" id="opt-trim">
         <input type="checkbox" id="opt-empty-rows">
         <input type="checkbox" id="opt-empty-cols">
-        <input type="checkbox" id="opt-duplicates">
-        <div id="dup-mode" class="hidden">
-          <input type="radio" name="dup-mode" value="keep-first" checked>
-          <input type="radio" name="dup-mode" value="absolute">
+        <div class="dup-group">
+          <input type="checkbox" id="opt-duplicates">
+          <div id="dup-mode" class="hidden">
+            <input type="radio" name="dup-mode" value="keep-first" checked>
+            <input type="radio" name="dup-mode" value="absolute">
+          </div>
         </div>
         <input type="checkbox" id="opt-numbers">
         <input type="checkbox" id="opt-headers">
