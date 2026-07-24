@@ -53,11 +53,15 @@ const Cleaner = (() => {
   }
 
   /**
-   * Trim leading/trailing whitespace from every cell.
+   * Trim leading/trailing whitespace from string cells only.
+   * Numbers, booleans, null, and undefined pass through unchanged.
    */
   function trimWhitespace(data) {
     return data.map((row) =>
-      row.map((cell) => (typeof cell === 'string' ? cell.trim() : String(cell ?? '')))
+      row.map((cell) => {
+        if (typeof cell === 'string') return cell.trim();
+        return cell;
+      })
     );
   }
 
@@ -71,8 +75,9 @@ const Cleaner = (() => {
       data[0],
       ...data.slice(1).filter((row) =>
         row.some((cell) => {
-          const val = typeof cell === 'string' ? cell.trim() : String(cell ?? '');
-          return val.length > 0;
+          if (cell === null || cell === undefined) return false;
+          if (typeof cell === 'string') return cell.trim().length > 0;
+          return true; // numbers, booleans, etc. are non-empty
         })
       ),
     ];
@@ -90,7 +95,9 @@ const Cleaner = (() => {
     for (let col = 0; col < colCount; col++) {
       const hasValue = data.some((row) => {
         const val = row[col];
-        return val != null && String(val).trim().length > 0;
+        if (val === null || val === undefined) return false;
+        if (typeof val === 'string') return val.trim().length > 0;
+        return true;
       });
       if (hasValue) keepCols.push(col);
     }
@@ -99,24 +106,17 @@ const Cleaner = (() => {
   }
 
   /**
-   * Fast row fingerprint for dedup — avoids JSON.stringify overhead.
-   */
-  function rowKey(row) {
-    return row.length + '\x00' + row.join('\x00');
-  }
-
-  /**
    * Remove ALL occurrences of any row that appears more than once.
-   * Leaves only rows that are truly unique. Header row is always preserved.
+   * Uses token-based comparison via tokenFromValue + rowComparisonKey.
    */
   function removeAbsoluteDuplicates(data) {
     if (data.length <= 1) return data;
     const header = data[0];
-    // Pre-compute keys once to avoid double-hashing each row
     const keys = new Array(data.length);
     const counts = new Map();
     for (let i = 1; i < data.length; i++) {
-      const key = rowKey(data[i]);
+      const tokens = data[i].map((v) => tokenFromValue(v));
+      const key = rowComparisonKey(tokens, false, []);
       keys[i] = key;
       counts.set(key, (counts.get(key) || 0) + 1);
     }
@@ -129,7 +129,7 @@ const Cleaner = (() => {
 
   /**
    * Remove duplicate data rows (keeps first occurrence).
-   * Header row (index 0) is always preserved.
+   * Uses token-based comparison via tokenFromValue + rowComparisonKey.
    */
   function removeDuplicateRows(data) {
     if (data.length <= 1) return data;
@@ -139,7 +139,8 @@ const Cleaner = (() => {
     const result = [header];
 
     for (let i = 1; i < data.length; i++) {
-      const key = rowKey(data[i]);
+      const tokens = data[i].map((v) => tokenFromValue(v));
+      const key = rowComparisonKey(tokens, false, []);
       if (!seen.has(key)) {
         seen.add(key);
         result.push(data[i]);

@@ -25,7 +25,8 @@ describe('Cleaner', () => {
     test('handles non-string cells', () => {
       const data = [[123, null, undefined, true]];
       const result = Cleaner.trimWhitespace(data);
-      expect(result).toEqual([['123', '', '', 'true']]);
+      // Non-string values pass through unchanged
+      expect(result).toEqual([[123, null, undefined, true]]);
     });
 
     test('handles empty data', () => {
