@@ -17,9 +17,8 @@
     "https://www.googleapis.com/*",
     "https://accounts.google.com/*"
   ],
-  "optional_permissions": [
-    "https://*/*",
-    "http://*/*"
+  "optional_host_permissions": [
+    "*://*/*"
   ],
   "icons": {
     "16": "images/logo-icon.png",

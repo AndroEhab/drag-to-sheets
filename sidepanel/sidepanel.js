@@ -940,11 +940,30 @@
       // Refresh preview when open-mode changes (also toggles dropdown state)
       document.querySelectorAll('input[name="open-mode"]').forEach((radio) => {
         radio.addEventListener('change', () => {
+          this._updateOpenModeCards();
           this.updateOpenModeState();
           this.schedulePreviewRefresh();
           this.savePreferences();
         });
       });
+
+      // Support clicking the card label as well as the radio
+      const separateCard = document.getElementById('open-mode-separate-card');
+      const mergeCard = document.getElementById('open-mode-merge-card');
+      if (separateCard) {
+        separateCard.addEventListener('click', () => {
+          const sepRadio = document.querySelector('input[name="open-mode"][value="separate"]');
+          if (sepRadio) sepRadio.checked = true;
+          sepRadio?.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+      }
+      if (mergeCard) {
+        mergeCard.addEventListener('click', () => {
+          const mergeRadio = document.querySelector('input[name="open-mode"][value="merge"]');
+          if (mergeRadio) mergeRadio.checked = true;
+          mergeRadio?.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+      }
 
       // Refresh preview when any cleaning option changes
       document.querySelectorAll('#options-panel input[type="checkbox"]').forEach((cb) => {
@@ -1274,13 +1293,14 @@
           this.markFilesChanged();
         }
 
-        // Restore preferences
+          // Restore preferences
         if (prefs) {
           // Open mode
           const modeRadio = document.querySelector(
             `input[name="open-mode"][value="${CSS.escape(prefs.openMode)}"]`
           );
           if (modeRadio) modeRadio.checked = true;
+          this._updateOpenModeCards();
 
           // Cleaning options
           const optMap = {
@@ -1708,6 +1728,19 @@
       }
     }
 
+    /** Update open-mode card selection visuals. */
+    _updateOpenModeCards() {
+      const mode = this.getOpenMode();
+      const separateCard = document.getElementById('open-mode-separate-card');
+      const mergeCard = document.getElementById('open-mode-merge-card');
+      if (separateCard) {
+        separateCard.classList.toggle('open-mode-card--selected', mode === 'separate');
+      }
+      if (mergeCard) {
+        mergeCard.classList.toggle('open-mode-card--selected', mode === 'merge');
+      }
+    }
+
     /** Enable/disable and populate the dropdown based on open mode. */
     updateOpenModeState() {
       const isMerge = this.getOpenMode() === 'merge';
@@ -1719,6 +1752,7 @@
         this.customMappingList.innerHTML = '';
       }
       void this.updateCustomMappingVisibility();
+      this._updateOpenModeCards();
     }
 
     fileIcon(ext) {

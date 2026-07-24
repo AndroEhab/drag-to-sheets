@@ -10,7 +10,7 @@
   <div class="app">
     <header class="app-header">
       <img src="../images/logo-horizontal.png" alt="Drag to Sheets" class="app-logo">
-      <span class="badge">beta</span>
+      <span class="badge">Beta</span>
     </header>
 
     <div id="drop-zone" class="drop-zone" role="button" tabindex="0" aria-label="Drop area for spreadsheet files">
@@ -19,7 +19,8 @@
           <i data-lucide="file-up" class="app-icon app-icon--drop" aria-hidden="true"></i>
         </div>
         <p class="drop-text">Drop spreadsheet files here</p>
-        <p class="drop-hint">.csv &nbsp; .tsv &nbsp; .xlsx &nbsp; .xls</p>
+        <p class="drop-hint">or click to browse</p>
+        <p class="drop-hint" style="margin-top:6px;color:var(--color-text-muted);font-size:11px;">CSV &nbsp; TSV &nbsp; XLSX &nbsp; XLS</p>
       </div>
       <input type="file" id="file-input" accept=".csv,.tsv,.xlsx,.xls" multiple hidden>
     </div>
@@ -28,6 +29,7 @@
       <button id="url-toggle" class="url-toggle" aria-expanded="false">
         <i data-lucide="link" class="app-icon app-icon--url" aria-hidden="true"></i>
         Import from URL
+        <i data-lucide="chevron-right" class="app-icon url-toggle-chevron" aria-hidden="true" style="width:14px;height:14px;"></i>
       </button>
       <div id="url-bar" class="url-bar hidden">
         <input
@@ -57,19 +59,24 @@
     <section id="options-panel" class="options-panel">
       <div id="merge-option" class="option-group hidden">
         <h3>Open Mode</h3>
-        <label class="radio-label">
-          <input type="radio" name="open-mode" value="separate" checked>
-          <span>Open separately</span>
-        </label>
-        <label class="radio-label">
-          <input type="radio" name="open-mode" value="merge">
-          <span>Merge into one spreadsheet</span>
-        </label>
+        <div class="open-mode-options">
+          <label class="open-mode-card open-mode-card--selected" id="open-mode-separate-card">
+            <input type="radio" name="open-mode" value="separate" checked>
+            <span class="open-mode-card-label">Open separately</span>
+            <span class="open-mode-card-hint">Each file becomes its own spreadsheet</span>
+          </label>
+          <label class="open-mode-card" id="open-mode-merge-card">
+            <input type="radio" name="open-mode" value="merge">
+            <span class="open-mode-card-label">Merge into one</span>
+            <span class="open-mode-card-hint">Combine files into a single spreadsheet</span>
+          </label>
+        </div>
         <div id="smart-mapping-option" class="smart-mapping-option hidden">
           <label class="checkbox-label">
             <input type="checkbox" id="opt-smart-mapping">
-            <span>header mapping</span>
+            <span>Match similar headers automatically</span>
           </label>
+          <p class="smart-mapping-hint">Combine columns with equivalent names.</p>
         </div>
         <div id="custom-mapping-option" class="custom-mapping-option hidden">
           <span class="custom-mapping-title">Map columns to master file</span>
@@ -80,64 +87,64 @@
 
       <div id="mapping-review" class="mapping-review hidden">
         <div class="mapping-review-header">
-          <h4>Detected Header Mappings</h4>
-          <p class="mapping-review-hint">These headers will be combined into single columns:</p>
+          <h4>Review detected mappings</h4>
+          <p class="mapping-review-hint">These source headers will be combined into the same destination column.</p>
         </div>
         <div id="mapping-review-list" class="mapping-review-list"></div>
         <div class="mapping-review-actions">
-          <button id="mapping-approve-btn" class="btn btn-primary btn-sm">Apply Mappings</button>
+          <button id="mapping-approve-btn" class="btn btn-primary btn-sm">Apply mappings</button>
           <button id="mapping-decline-btn" class="btn-text">Decline</button>
         </div>
       </div>
 
       <div id="cleaning-options" class="option-group hidden">
         <h3>Cleaning Options</h3>
-        <label class="checkbox-label">
-          <input type="checkbox" id="opt-trim">
-          <span>Trim whitespace</span>
-        </label>
-        <label class="checkbox-label">
-          <input type="checkbox" id="opt-empty-rows">
-          <span>Remove empty rows</span>
-        </label>
-        <label class="checkbox-label">
-          <input type="checkbox" id="opt-empty-cols">
-          <span>Remove empty columns</span>
-        </label>
-        <label class="checkbox-label">
-          <input type="checkbox" id="opt-duplicates">
-          <span>Remove duplicate rows</span>
-        </label>
-        <div id="dup-mode" class="dup-mode hidden">
-          <label class="radio-label radio-sub">
-            <input type="radio" name="dup-mode" value="keep-first" checked>
-            <span>Keep first occurrence</span>
-          </label>
-          <label class="radio-label radio-sub">
-            <input type="radio" name="dup-mode" value="absolute">
-            <span>Remove all instances</span>
-          </label>
-        </div>
-        <div class="help-row">
+        <div class="cleaning-options-grid">
           <label class="checkbox-label">
-            <input type="checkbox" id="opt-numbers">
-            <span>Fix number formatting</span>
+            <input type="checkbox" id="opt-trim">
+            <span>Trim whitespace</span>
           </label>
-        </div>
-        <div class="help-row">
           <label class="checkbox-label">
-            <input type="checkbox" id="opt-headers">
-            <span>Normalize header names</span>
+            <input type="checkbox" id="opt-empty-rows">
+            <span>Remove empty rows</span>
           </label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="opt-empty-cols">
+            <span>Remove empty columns</span>
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="opt-duplicates">
+            <span>Remove duplicate rows</span>
+          </label>
+          <div id="dup-mode" class="dup-mode hidden">
+            <label class="radio-label radio-sub">
+              <input type="radio" name="dup-mode" value="keep-first" checked>
+              <span>Keep first occurrence</span>
+            </label>
+            <label class="radio-label radio-sub">
+              <input type="radio" name="dup-mode" value="absolute">
+              <span>Remove all instances</span>
+            </label>
+          </div>
+          <div class="help-row">
+            <label class="checkbox-label">
+              <input type="checkbox" id="opt-numbers">
+              <span>Fix number formatting</span>
+            </label>
+          </div>
+          <div class="help-row">
+            <label class="checkbox-label">
+              <input type="checkbox" id="opt-headers">
+              <span>Normalize header names</span>
+            </label>
+          </div>
         </div>
       </div>
     </section>
 
     <div class="actions">
       <button id="upload-btn" class="btn btn-primary" disabled>
-        <span class="btn-icon">
-          <i data-lucide="square-arrow-out-up-right" class="app-icon app-icon--button" aria-hidden="true"></i>
-        </span>
+        <i data-lucide="square-arrow-out-up-right" class="app-icon app-icon--button" aria-hidden="true"></i>
         Open in Sheets
       </button>
       <button id="settings-btn" class="btn-settings" title="Cleaning options" aria-pressed="false" aria-label="Toggle cleaning options">
