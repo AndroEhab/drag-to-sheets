@@ -1038,7 +1038,10 @@
       });
 
       // Refresh preview when user picks a different file
-      this.previewSelect.addEventListener('change', () => this.schedulePreviewRefresh());
+      this.previewSelect.addEventListener('change', () => {
+        this.schedulePreviewRefresh();
+        this._updateSummaryCards();
+      });
 
       // Refresh preview when open-mode changes (also toggles dropdown state)
       document.querySelectorAll('input[name="open-mode"]').forEach((radio) => {
@@ -1047,6 +1050,7 @@
           this.updateOpenModeState();
           this.schedulePreviewRefresh();
           this.savePreferences();
+          this._updateSummaryCards();
         });
       });
 
@@ -1750,6 +1754,7 @@
       this.renderFileList();
       this.schedulePreviewRefresh();
       this.saveFilesSession();
+      this._updateSummaryCards();
     }
 
     removeFile(index) {
@@ -1884,6 +1889,7 @@
       } else {
         this.hidePreview();
       }
+      this._updateSummaryCards();
     }
 
     /** Rebuild the dropdown options from the current files array. */
@@ -1919,6 +1925,39 @@
       if (mergeCard) {
         mergeCard.classList.toggle('open-mode-card--selected', mode === 'merge');
       }
+    }
+
+    /** Update the dataset-summary cards. */
+    _updateSummaryCards() {
+      const el = document.getElementById('dataset-summary');
+      if (!el) return;
+
+      const count = this.files.length;
+      if (count === 0) {
+        el.classList.add('hidden');
+        return;
+      }
+      el.classList.remove('hidden');
+
+      document.getElementById('summary-files').textContent = count;
+
+      let totalRows = 0;
+      let maxCols = 0;
+      let hasAllStats = true;
+
+      for (const file of this.files) {
+        const stats = file.stats || (file.parsed ? this.getEntryStats(file) : null);
+        if (!stats) {
+          hasAllStats = false;
+          continue;
+        }
+        const sheetCount = file.parsed?.sheets?.length || 1;
+        totalRows += stats.rowCount - sheetCount;
+        maxCols = Math.max(maxCols, stats.colCount);
+      }
+
+      document.getElementById('summary-rows').textContent = hasAllStats ? totalRows.toLocaleString() : '\u2014';
+      document.getElementById('summary-cols').textContent = hasAllStats ? maxCols.toLocaleString() : '\u2014';
     }
 
     /** Enable/disable and populate the dropdown based on open mode. */

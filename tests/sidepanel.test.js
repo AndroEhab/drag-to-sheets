@@ -115,6 +115,20 @@ function setupDOM() {
     <input type="file" id="file-input" multiple>
     <ul id="file-list"></ul>
     <span id="file-count"></span>
+    <div id="dataset-summary" class="dataset-summary hidden">
+      <div class="summary-card">
+        <span class="summary-card-value" id="summary-files">0</span>
+        <span class="summary-card-label">Files</span>
+      </div>
+      <div class="summary-card">
+        <span class="summary-card-value" id="summary-rows">0</span>
+        <span class="summary-card-label">Rows</span>
+      </div>
+      <div class="summary-card">
+        <span class="summary-card-value" id="summary-cols">0</span>
+        <span class="summary-card-label">Columns</span>
+      </div>
+    </div>
     <div id="options-panel">
       <div id="merge-option" class="hidden">
         <div class="open-mode-options">
@@ -373,6 +387,105 @@ describe('DragToSheetsApp', () => {
     test('clear button starts disabled', async () => {
       const app = await createApp();
       expect(app.clearBtn.disabled).toBe(true);
+    });
+  });
+
+  // ---- dataset summary cards ----
+
+  describe('dataset summary', () => {
+    function setFiles(app, files) {
+      app.files = files;
+      app.updateUI();
+    }
+
+    test('hidden when no files are loaded', async () => {
+      const app = await createApp();
+      const el = document.getElementById('dataset-summary');
+      expect(el.classList.contains('hidden')).toBe(true);
+    });
+
+    test('shows file count for one file', async () => {
+      const app = await createApp();
+      setFiles(app, [{ name: 'a.csv', parsed: { sheets: [{ name: 'Sheet1', data: [['h'], ['v1']] }] }, stats: { rowCount: 2, colCount: 1 } }]);
+
+      expect(document.getElementById('summary-files').textContent).toBe('1');
+    });
+
+    test('shows row and column counts for one file excluding header', async () => {
+      const app = await createApp();
+      setFiles(app, [{ name: 'a.csv', parsed: { sheets: [{ name: 'Sheet1', data: [['h'], ['v1'], ['v2']] }] }, stats: { rowCount: 3, colCount: 1 } }]);
+
+      expect(document.getElementById('summary-rows').textContent).toBe('2');
+      expect(document.getElementById('summary-cols').textContent).toBe('1');
+    });
+
+    test('aggregates rows and max columns across multiple files', async () => {
+      const app = await createApp();
+      setFiles(app, [
+        { name: 'a.csv', parsed: { sheets: [{ name: 'Sheet1', data: [['h1','h2'], ['v1','v2']] }] }, stats: { rowCount: 2, colCount: 2 } },
+        { name: 'b.csv', parsed: { sheets: [{ name: 'Sheet1', data: [['h1'], ['v1'], ['v2'], ['v3']] }] }, stats: { rowCount: 4, colCount: 1 } },
+      ]);
+
+      // rows: (2-1) + (4-1) = 1 + 3 = 4; cols: max(2,1) = 2
+      expect(document.getElementById('summary-files').textContent).toBe('2');
+      expect(document.getElementById('summary-rows').textContent).toBe('4');
+      expect(document.getElementById('summary-cols').textContent).toBe('2');
+    });
+
+    test('merge mode shows max columns', async () => {
+      const app = await createApp();
+      document.querySelector('input[name="open-mode"][value="merge"]').checked = true;
+      setFiles(app, [
+        { name: 'a.csv', parsed: { sheets: [{ name: 'Sheet1', data: [['h1','h2'], ['v1','v2']] }] }, stats: { rowCount: 2, colCount: 2 } },
+        { name: 'b.csv', parsed: { sheets: [{ name: 'Sheet1', data: [['h1'], ['v1'], ['v2']] }] }, stats: { rowCount: 3, colCount: 1 } },
+      ]);
+
+      expect(document.getElementById('summary-files').textContent).toBe('2');
+      expect(document.getElementById('summary-rows').textContent).toBe('3');
+      expect(document.getElementById('summary-cols').textContent).toBe('2');
+    });
+
+    test('shows placeholder when stats are not available', async () => {
+      const app = await createApp();
+      // files with no parsed data and no stats
+      app.files = [{ name: 'a.csv', parsed: null }];
+      app._updateSummaryCards();
+
+      expect(document.getElementById('summary-rows').textContent).toBe('\u2014');
+      expect(document.getElementById('summary-cols').textContent).toBe('\u2014');
+    });
+
+    test('restored session updates summary cards', async () => {
+      const app = await createApp();
+      chrome.storage.session.get.mockResolvedValue({});
+      chrome.storage.local.get.mockResolvedValue({
+        prefs: {
+          openMode: 'merge',
+          cleaningOptions: {},
+          settingsOpen: false,
+          smartMapping: false,
+          customMappings: [],
+        },
+      });
+      app.files = [
+        { name: 'a.csv', parsed: { sheets: [{ name: 'Sheet1', data: [['h1','h2'], ['v1','v2'], ['v3','v4']] }] }, stats: { rowCount: 3, colCount: 2 } },
+      ];
+      await app.restoreSession();
+
+      expect(document.getElementById('summary-files').textContent).toBe('1');
+      expect(document.getElementById('summary-rows').textContent).toBe('2');
+      expect(document.getElementById('summary-cols').textContent).toBe('2');
+    });
+
+    test('summary cards hide when all files are cleared', async () => {
+      const app = await createApp();
+      setFiles(app, [{ name: 'a.csv', parsed: { sheets: [{ name: 'Sheet1', data: [['h'], ['v']] }] }, stats: { rowCount: 2, colCount: 1 } }]);
+
+      expect(document.getElementById('dataset-summary').classList.contains('hidden')).toBe(false);
+
+      app.clearFiles();
+
+      expect(document.getElementById('dataset-summary').classList.contains('hidden')).toBe(true);
     });
   });
 
