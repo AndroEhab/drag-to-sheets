@@ -265,6 +265,7 @@ body {
   border-radius: var(--radius-sm);
   border: 1px solid var(--color-border);
   min-width: 0;
+  overflow: hidden;
 }
 
 .summary-card-value {
@@ -273,6 +274,10 @@ body {
   color: var(--color-text);
   line-height: 1.2;
   font-variant-numeric: tabular-nums;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .summary-card-label {

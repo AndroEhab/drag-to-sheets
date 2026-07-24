@@ -63,6 +63,7 @@
       const stats = {
         sheetCount: parsed?.sheets?.length || 0,
         rowCount: 0,
+        dataRowCount: 0,
         colCount: 0,
         cellCount: 0,
         styledCellCount: 0,
@@ -72,6 +73,7 @@
         const rows = sheet.data?.length || 0;
         const cols = sheet.data?.[0]?.length || 0;
         stats.rowCount += rows;
+        stats.dataRowCount += Math.max(rows - 1, 0);
         stats.colCount = Math.max(stats.colCount, cols);
         stats.cellCount += rows * cols;
         if (Array.isArray(sheet.styles)) {
@@ -88,8 +90,9 @@
 
     getEntryStats(item) {
       if (item?.stats) return item.stats;
-      const stats = this.computeParsedStats(item?.parsed || { sheets: [] });
-      if (item) item.stats = stats;
+      if (!item?.parsed) return null;
+      const stats = this.computeParsedStats(item.parsed);
+      item.stats = stats;
       return stats;
     }
 
@@ -135,9 +138,11 @@
       for (const item of this.files) {
         totalBytes += this.getFileSize(item);
         const stats = this.getEntryStats(item);
-        totalCells += stats.cellCount;
-        totalStyledCells += stats.styledCellCount;
-        maxFileCells = Math.max(maxFileCells, stats.cellCount);
+        if (stats) {
+          totalCells += stats.cellCount;
+          totalStyledCells += stats.styledCellCount;
+          maxFileCells = Math.max(maxFileCells, stats.cellCount);
+        }
       }
 
       return {
@@ -409,6 +414,7 @@
         preserveFormatting: Boolean(options.preserveFormatting),
       });
 
+      this._updateSummaryCards();
       return parsed;
     }
 
@@ -435,6 +441,7 @@
       return {
         sheetCount: meta.sheetCount || preview?.sheets?.length || 1,
         rowCount,
+        dataRowCount: Math.max(rowCount - 1, 0),
         colCount,
         cellCount: rowCount && colCount ? rowCount * colCount : 0,
         styledCellCount: 0,
@@ -493,6 +500,7 @@
       if (!item.stats) {
         item.stats = this.buildStatsFromPreview(preview);
       }
+      this._updateSummaryCards();
       return preview;
     }
 
@@ -1040,7 +1048,6 @@
       // Refresh preview when user picks a different file
       this.previewSelect.addEventListener('change', () => {
         this.schedulePreviewRefresh();
-        this._updateSummaryCards();
       });
 
       // Refresh preview when open-mode changes (also toggles dropdown state)
@@ -1754,7 +1761,6 @@
       this.renderFileList();
       this.schedulePreviewRefresh();
       this.saveFilesSession();
-      this._updateSummaryCards();
     }
 
     removeFile(index) {
@@ -1951,8 +1957,20 @@
           hasAllStats = false;
           continue;
         }
-        const sheetCount = file.parsed?.sheets?.length || 1;
-        totalRows += stats.rowCount - sheetCount;
+        // dataRowCount from extended stats; derive from parsed sheets for legacy data
+        let dataRows = stats.dataRowCount;
+        if (dataRows === undefined && file.parsed?.sheets) {
+          dataRows = 0;
+          for (const sheet of file.parsed.sheets) {
+            dataRows += Math.max((sheet.data?.length || 0) - 1, 0);
+          }
+          stats.dataRowCount = dataRows;
+        }
+        if (dataRows === undefined) {
+          hasAllStats = false;
+          continue;
+        }
+        totalRows += dataRows;
         maxCols = Math.max(maxCols, stats.colCount);
       }
 
