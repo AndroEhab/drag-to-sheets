@@ -31,7 +31,9 @@ const Cleaner = (() => {
     let meta = cellMeta || null;
 
     if (options.trim) {
-      result = trimWhitespace(result);
+      const trimResult = trimWhitespace(result, meta);
+      result = trimResult.data;
+      meta = trimResult.cellMeta || null;
     }
     if (options.removeEmptyRows) {
       const opResult = removeEmptyRows(result, meta);
@@ -66,13 +68,20 @@ const Cleaner = (() => {
    * Trim leading/trailing whitespace from string cells only.
    * Numbers, booleans, null, and undefined pass through unchanged.
    */
-  function trimWhitespace(data) {
-    return data.map((row) =>
-      row.map((cell) => {
-        if (typeof cell === 'string') return cell.trim();
+  function trimWhitespace(data, meta) {
+    const trimmedData = data.map((row, ri) =>
+      row.map((cell, ci) => {
+        if (typeof cell === 'string') {
+          const trimmed = cell.trim();
+          if (meta && meta[ri] && meta[ri][ci] && meta[ri][ci].type === 'string') {
+            meta[ri][ci].value = trimmed;
+          }
+          return trimmed;
+        }
         return cell;
       })
     );
+    return { data: trimmedData, cellMeta: meta || null };
   }
 
   /**
@@ -85,12 +94,13 @@ const Cleaner = (() => {
 
     const keepIndices = [0];
     for (let i = 1; i < data.length; i++) {
-      const row = data[i];
-      const isEmpty = row.every((cell) => {
-        if (cell === null || cell === undefined) return true;
-        if (typeof cell === 'string') return cell.trim().length === 0;
-        return false;
-      });
+      const isEmpty = meta
+        ? meta[i].every((token) => isTokenEmpty(token))
+        : data[i].every((cell) => {
+            if (cell === null || cell === undefined) return true;
+            if (typeof cell === 'string') return cell.trim().length === 0;
+            return false;
+          });
       if (!isEmpty) keepIndices.push(i);
     }
 
@@ -109,12 +119,15 @@ const Cleaner = (() => {
     const colCount = data.reduce((max, r) => Math.max(max, r.length), 0);
     const keepCols = [];
     for (let col = 0; col < colCount; col++) {
-      if (data.some((row) => {
-        const val = row[col];
-        if (val === null || val === undefined) return false;
-        if (typeof val === 'string') return val.trim().length > 0;
-        return true;
-      })) keepCols.push(col);
+      const hasContent = meta
+        ? meta.some((row) => row[col] && !isTokenEmpty(row[col]))
+        : data.some((row) => {
+            const val = row[col];
+            if (val === null || val === undefined) return false;
+            if (typeof val === 'string') return val.trim().length > 0;
+            return true;
+          });
+      if (hasContent) keepCols.push(col);
     }
 
     const result = { data: data.map((row) => keepCols.map((col) => row[col] ?? '')) };
@@ -319,6 +332,12 @@ const Cleaner = (() => {
    * When `shouldTrim` is true, string values are trimmed before keying.
    */
   function tokenComparisonKey(token, shouldTrim) {
+    if (token.type === 'formula') {
+      return `formula\x00${token.value ?? ''}`;
+    }
+    if (token.type === 'date') {
+      return `date\x00${token.value ?? ''}\x00${token.formatType || 'DATE'}`;
+    }
     if (token.type === 'string' && shouldTrim) {
       return `string\x00${String(token.value ?? '').trim()}`;
     }

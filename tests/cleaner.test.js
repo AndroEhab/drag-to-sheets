@@ -11,7 +11,7 @@ describe('Cleaner', () => {
         ['  Name  ', ' Age'],
         [' Alice ', '  30  '],
       ];
-      expect(Cleaner.trimWhitespace(data)).toEqual([
+      expect(Cleaner.trimWhitespace(data).data).toEqual([
         ['Name', 'Age'],
         ['Alice', '30'],
       ]);
@@ -19,18 +19,18 @@ describe('Cleaner', () => {
 
     test('trims tabs and mixed whitespace', () => {
       const data = [['\t hello \n']];
-      expect(Cleaner.trimWhitespace(data)).toEqual([['hello']]);
+      expect(Cleaner.trimWhitespace(data).data).toEqual([['hello']]);
     });
 
     test('handles non-string cells', () => {
       const data = [[123, null, undefined, true]];
       const result = Cleaner.trimWhitespace(data);
       // Non-string values pass through unchanged
-      expect(result).toEqual([[123, null, undefined, true]]);
+      expect(result.data).toEqual([[123, null, undefined, true]]);
     });
 
     test('handles empty data', () => {
-      expect(Cleaner.trimWhitespace([])).toEqual([]);
+      expect(Cleaner.trimWhitespace([]).data).toEqual([]);
     });
 
     test('does not mutate original data', () => {

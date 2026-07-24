@@ -1415,7 +1415,7 @@ describe('DragToSheetsApp', () => {
       expect(app.ensureParsedEntry).toHaveBeenCalled();
       expect(GoogleAPI.createSpreadsheet).toHaveBeenCalledWith(
         'parse',
-        [{ name: 'parse', data: [['A', 'B'], ['1', '2']] }],
+        [{ name: 'parse', data: [['A', 'B'], ['1', '2']], cellMeta: null }],
         expect.any(Object)
       );
       expect(GoogleAPI.uploadFileToDrive).not.toHaveBeenCalled();

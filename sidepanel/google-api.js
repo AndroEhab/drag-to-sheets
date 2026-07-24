@@ -227,6 +227,40 @@ const GoogleAPI = (() => {
     return ranges;
   }
 
+  /**
+   * Build updateCells rows using typed userEnteredValue objects from
+   * cell metadata tokens, preserving formulas, numbers, booleans, etc.
+   */
+  function buildTypedUpdateRows(data, cellMeta) {
+    const rows = data.map((row, ri) => ({
+      values: row.map((cell, ci) => {
+        const token = cellMeta && cellMeta[ri] && cellMeta[ri][ci];
+        if (token) {
+          switch (token.type) {
+            case 'formula':
+              return { userEnteredValue: { formulaValue: token.value } };
+            case 'number':
+              return { userEnteredValue: { numberValue: token.value } };
+            case 'boolean':
+              return { userEnteredValue: { boolValue: token.value } };
+            case 'date':
+              return { userEnteredValue: { numberValue: token.value } };
+            case 'string': {
+              const str = String(token.value ?? '');
+              return { userEnteredValue: { stringValue: str } };
+            }
+            case 'empty':
+              return {};
+            default:
+              return { userEnteredValue: { stringValue: String(cell ?? '') } };
+          }
+        }
+        return { userEnteredValue: { stringValue: String(cell ?? '') } };
+      }),
+    }));
+    return rows;
+  }
+
   function buildValueRangesForSheets(sheetsData) {
     const ranges = [];
     for (const sheet of sheetsData) {
@@ -757,11 +791,44 @@ const GoogleAPI = (() => {
 
     const spreadsheetId = spreadsheet.spreadsheetId;
 
-    // Write values
-    const valueRanges = buildValueRangesForSheets(sanitized);
+    // Write values — use typed cells when cellMeta is available, RAW otherwise
+    const typedSheets = sanitized.filter((s) => !!s.cellMeta);
+    const rawSheets = sanitized.filter((s) => !s.cellMeta);
 
-    if (valueRanges.length > 0) {
-      await sendValueRanges(spreadsheetId, valueRanges, 'RAW', context);
+    if (rawSheets.length > 0) {
+      const valueRanges = buildValueRangesForSheets(rawSheets);
+      if (valueRanges.length > 0) {
+        await sendValueRanges(spreadsheetId, valueRanges, 'RAW', context);
+      }
+    }
+
+    if (typedSheets.length > 0) {
+      const info = await getSpreadsheetInfo(spreadsheetId, context);
+      const requests = [];
+      for (const sheet of typedSheets) {
+        const gsSheet = info.sheets.find((s) => s.properties.title === sheet.name);
+        if (!gsSheet) continue;
+        const sheetId = gsSheet.properties.sheetId;
+        const rowCount = sheet.data.length;
+        const colCount = Math.max(...sheet.data.map((r) => r.length), 1);
+        const rows = buildTypedUpdateRows(sheet.data, sheet.cellMeta);
+        requests.push({
+          updateCells: {
+            rows,
+            fields: 'userEnteredValue',
+            range: {
+              sheetId,
+              startRowIndex: 0,
+              endRowIndex: rowCount,
+              startColumnIndex: 0,
+              endColumnIndex: colCount,
+            },
+          },
+        });
+      }
+      if (requests.length > 0) {
+        await sendBatchUpdateRequests(spreadsheetId, requests, context);
+      }
     }
 
     // Auto-resize columns to fit content

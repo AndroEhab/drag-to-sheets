@@ -713,8 +713,8 @@
 
       const cleanPromise = this.runProcessingTask(
         'clean',
-        { data: sheet.data, options },
-        () => Cleaner.apply(sheet.data, options)
+        { data: sheet.data, options, cellMeta: sheet.cellMeta || null },
+        () => Cleaner.apply(sheet.data, options, sheet.cellMeta || null)
       ).catch((error) => {
         this.cleanedSheetCache.delete(cacheKey);
         throw error;
@@ -755,10 +755,13 @@
         { files: raw, mergeOptions: mergeOpts, cleanOptions: options },
         () => {
           const merged = Merger.merge(raw, mergeOpts);
-          merged.sheets = merged.sheets.map((sheet) => ({
-            name: sheet.name,
-            data: Cleaner.apply(sheet.data, options),
-          }));
+          merged.sheets = merged.sheets.map((sheet) => {
+            const cleaned = Cleaner.apply(sheet.data, options, sheet.cellMeta || null);
+            if (Array.isArray(cleaned)) {
+              return { name: sheet.name, data: cleaned, cellMeta: null };
+            }
+            return { name: sheet.name, data: cleaned.data, cellMeta: cleaned.cellMeta || null };
+          });
           return merged;
         }
       )
@@ -1188,7 +1191,7 @@
         lazy: Boolean(item.lazy && !item.parsed),
         handleId: item.handleId || null,
         sheets: item.parsed
-          ? item.parsed.sheets.map(({ name, data }) => ({ name, data }))
+          ? item.parsed.sheets.map(({ name, data, cellMeta }) => ({ name, data, cellMeta }))
           : null,
       }));
       const indexedDbFiles = this.files.map((item) => ({
@@ -1203,7 +1206,7 @@
         file: item.file || null,
         parsed: item.parsed
           ? {
-            sheets: item.parsed.sheets.map(({ name, data, styles }) => ({ name, data, styles: styles || null })),
+            sheets: item.parsed.sheets.map(({ name, data, styles, cellMeta }) => ({ name, data, styles: styles || null, cellMeta: cellMeta || null })),
             themeColors: item.parsed.themeColors || null,
           }
           : null,
@@ -1855,9 +1858,13 @@
         const sheets = [];
         for (let sheetIndex = 0; sheetIndex < item.parsed.sheets.length; sheetIndex++) {
           const sheet = item.parsed.sheets[sheetIndex];
+          const result = await this.getCleanedSheetData(fileIndex, sheetIndex, options);
+          const cleanedData = Array.isArray(result) ? result : result.data;
+          const cleanedMeta = Array.isArray(result) ? null : result.cellMeta;
           sheets.push({
             name: sheet.name,
-            data: await this.getCleanedSheetData(fileIndex, sheetIndex, options),
+            data: cleanedData,
+            cellMeta: cleanedMeta,
           });
         }
         processed.push({ sheets });
@@ -2088,7 +2095,8 @@
           return;
         }
         if (!this.isPreviewTaskCurrent(previewTaskId)) return;
-        const cleaned = await this.getCleanedSheetData(isNaN(idx) ? 0 : idx, 0, options);
+        const cleanedResult = await this.getCleanedSheetData(isNaN(idx) ? 0 : idx, 0, options);
+        const cleaned = Array.isArray(cleanedResult) ? cleanedResult : cleanedResult.data;
         if (!this.isPreviewTaskCurrent(previewTaskId)) return;
         if (this.hasPreviewData(cleaned)) {
           this.renderPreviewTable(cleaned, item.name);
@@ -2985,9 +2993,13 @@
       const sheetsData = [];
       for (let sheetIndex = 0; sheetIndex < item.parsed.sheets.length; sheetIndex++) {
         const sheet = item.parsed.sheets[sheetIndex];
+        const result = await this.getCleanedSheetData(index, sheetIndex, options);
+        const cleanedData = Array.isArray(result) ? result : result.data;
+        const cleanedMeta = Array.isArray(result) ? null : result.cellMeta;
         sheetsData.push({
           name: sheet.name,
-          data: await this.getCleanedSheetData(index, sheetIndex, options),
+          data: cleanedData,
+          cellMeta: cleanedMeta,
         });
       }
       onProgress?.(0.5);

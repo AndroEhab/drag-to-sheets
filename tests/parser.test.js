@@ -444,6 +444,20 @@ describe('Parser', () => {
     });
 
     test('preserves native cell types where available', async () => {
+      global.XLSX.read.mockReturnValue({
+        SheetNames: ['Sheet1'],
+        Themes: { themeElements: { clrScheme: [] } },
+        Sheets: {
+          Sheet1: {
+            '!ref': 'A1:A4',
+            'A1': { v: 'Col', t: 's' },
+            'A2': { v: 123, t: 'n' },
+            'A3': { v: null },
+            'A4': { v: true, t: 'b' },
+          },
+        },
+      });
+      global.XLSX.utils.decode_range = jest.fn(() => ({ s: { r: 0, c: 0 }, e: { r: 3, c: 0 } }));
       global.XLSX.utils.sheet_to_json.mockReturnValue([
         ['Col'],
         [123],

@@ -423,13 +423,26 @@ const Parser = (() => {
       const sheet = workbook.Sheets[name];
       const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
 
-      const maxCols = data.reduce((max, row) => Math.max(max, row.length), 0);
-      const styles = extractSheetStyles(sheet, data.length, maxCols, workbook, sheetIdx);
-      const cellMeta = buildCellMeta(sheet, data.length, maxCols);
+      const fullRef = sheet?.['!fullref'] || sheet?.['!ref'];
+      let refRows = data.length;
+      let rawMaxCols = data.reduce((max, row) => Math.max(max, row.length), 0);
+      if (fullRef) {
+        const range = XLSX.utils.decode_range(fullRef);
+        refRows = range.e.r - range.s.r + 1;
+        rawMaxCols = Math.max(rawMaxCols, range.e.c - range.s.c + 1);
+      }
+      const maxCols = Math.max(rawMaxCols, 1);
+
+      while (data.length < refRows) {
+        data.push([]);
+      }
+
+      const styles = extractSheetStyles(sheet, refRows, maxCols, workbook, sheetIdx);
+      const cellMeta = buildCellMeta(sheet, refRows, maxCols);
 
       // Preserve native cell types (numbers, booleans, dates)
-      const normalized = new Array(data.length);
-      for (let ri = 0; ri < data.length; ri++) {
+      const normalized = new Array(refRows);
+      for (let ri = 0; ri < refRows; ri++) {
         const src = data[ri];
         const dest = new Array(maxCols);
         const len = Math.min(src.length, maxCols);
@@ -442,8 +455,19 @@ const Parser = (() => {
         normalized[ri] = dest;
       }
 
-      // Trim trailing empty rows
-      while (normalized.length > 1 && normalized[normalized.length - 1].every((c) => c === '')) {
+      // Trim trailing empty rows, respecting formula metadata
+      while (
+        normalized.length > 1 &&
+        normalized[normalized.length - 1].every((c, ci) => {
+          if (cellMeta && cellMeta[normalized.length - 1]) {
+            const token = cellMeta[normalized.length - 1][ci];
+            if (!token) return true;
+            if (token.type === 'formula') return false;
+            return token.type === 'empty' || (token.type === 'string' && String(token.value || '').trim().length === 0);
+          }
+          return c === '';
+        })
+      ) {
         normalized.pop();
         if (styles) styles.pop();
         if (cellMeta) cellMeta.pop();
@@ -496,7 +520,7 @@ const Parser = (() => {
 
     // Formula cells — preserve formula string
     if (f !== undefined && f !== null) {
-      return { type: 'formula', value: v, formula: f };
+      return { type: 'formula', value: f, displayValue: v };
     }
 
     // Date/time determined by number format

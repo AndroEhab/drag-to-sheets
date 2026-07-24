@@ -54,7 +54,7 @@ self.onmessage = async (event) => {
         result = await Parser.preview(payload.file, payload.options || {});
         break;
       case 'clean':
-        result = await Cleaner.apply(payload.data, payload.options || {});
+        result = await Cleaner.apply(payload.data, payload.options || {}, payload.cellMeta || null);
         break;
       case 'merge':
         result = await Merger.merge(payload.files || [], payload.options || {});
@@ -62,10 +62,13 @@ self.onmessage = async (event) => {
       case 'mergeAndClean': {
         const merged = await Merger.merge(payload.files || [], payload.mergeOptions || {});
         const cleanOpts = payload.cleanOptions || {};
-        merged.sheets = await Promise.all(merged.sheets.map(async (sheet) => ({
-          name: sheet.name,
-          data: await Cleaner.apply(sheet.data, cleanOpts),
-        })));
+        merged.sheets = await Promise.all(merged.sheets.map(async (sheet) => {
+          const cleaned = await Cleaner.apply(sheet.data, cleanOpts, sheet.cellMeta || null);
+          if (Array.isArray(cleaned)) {
+            return { name: sheet.name, data: cleaned, cellMeta: null };
+          }
+          return { name: sheet.name, data: cleaned.data, cellMeta: cleaned.cellMeta || null };
+        }));
         result = merged;
         break;
       }
