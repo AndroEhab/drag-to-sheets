@@ -800,6 +800,36 @@ describe('GoogleAPI', () => {
       expect(rows[0].values[0].userEnteredValue.formulaValue).toBe('=SUM(A1:A3)');
     });
 
+    test('typed output preserves a formula with a numeric-looking cached result', async () => {
+      const formula = '=TEXT(1234,"0")';
+      mockFetchSequence(
+        {
+          spreadsheetId: 's1',
+          spreadsheetUrl: 'url',
+          sheets: [{ properties: { sheetId: 0, title: 'Sheet1' } }],
+        },
+        { sheets: [{ properties: { sheetId: 0, title: 'Sheet1' } }] },
+        {},
+        {}
+      );
+
+      await GoogleAPI.createSpreadsheet('Formula result', [
+        {
+          name: 'Sheet1',
+          data: [['Result'], ['1234']],
+          cellMeta: [
+            [{ type: 'string', value: 'Result' }],
+            [{ type: 'formula', value: formula, displayValue: '1234' }],
+          ],
+        },
+      ]);
+
+      const typedBody = JSON.parse(global.fetch.mock.calls[2][1].body);
+      const userEnteredValue = typedBody.requests[0].updateCells.rows[1].values[0].userEnteredValue;
+      expect(userEnteredValue.formulaValue).toBe(formula);
+      expect(userEnteredValue).not.toHaveProperty('numberValue');
+    });
+
     test('literal string beginning with = uses stringValue', async () => {
       mockFetchSequence(
         {

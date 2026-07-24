@@ -22,7 +22,7 @@
   };
   const PREVIEW_SAMPLE_ROWS = 51;
   const EXCEL_METADATA_PREVIEW_NOTICE =
-    'Excel metadata-sensitive transformations, including Fix numbers, are not represented in this sample because trustworthy cell metadata is unavailable; they will be applied on upload.';
+    'Excel metadata-sensitive transformations (Trim, Fix numbers, and Normalize headers) are not represented in this sample because trustworthy cell metadata is unavailable; they will be applied on upload.';
 
   class DragToSheetsApp {
     constructor() {
@@ -522,7 +522,9 @@
 
       if (isExcel && !metadataTrusted) {
         notices.push(EXCEL_METADATA_PREVIEW_NOTICE);
+        cleaningOptions.trim = false;
         cleaningOptions.fixNumbers = false;
+        cleaningOptions.normalizeHeaders = false;
       }
 
       if (hasNonStructural) {
@@ -605,7 +607,9 @@
 
       if (hasUntrustedExcelMetadata) {
         notices.push(EXCEL_METADATA_PREVIEW_NOTICE);
+        cleaningOptions.trim = false;
         cleaningOptions.fixNumbers = false;
+        cleaningOptions.normalizeHeaders = false;
       }
 
       if (hasNonStructural && merged.sheets[0]?.data) {

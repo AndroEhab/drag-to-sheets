@@ -39,6 +39,26 @@ describe('Cleaner', () => {
       Cleaner.trimWhitespace(data);
       expect(data).toEqual(original);
     });
+
+    test('with metadata, trims only string tokens', () => {
+      const data = [['  header  ', '  cached formula  ', '  number display  ', '  text  ']];
+      const cellMeta = [[
+        { type: 'string', value: '  header  ' },
+        { type: 'formula', value: '=A1', displayValue: '  cached formula  ' },
+        { type: 'number', value: 42 },
+        { type: 'string', value: '  text  ' },
+      ]];
+
+      const result = Cleaner.trimWhitespace(data, cellMeta);
+
+      expect(result.data[0]).toEqual(['header', '  cached formula  ', '  number display  ', 'text']);
+      expect(result.cellMeta[0]).toEqual([
+        { type: 'string', value: 'header' },
+        { type: 'formula', value: '=A1', displayValue: '  cached formula  ' },
+        { type: 'number', value: 42 },
+        { type: 'string', value: 'text' },
+      ]);
+    });
   });
 
   // ---- removeEmptyRows ----
@@ -612,6 +632,28 @@ describe('Cleaner', () => {
       expect(result.cellMeta[1][0]).toEqual({ type: 'string', value: '0012345' });
     });
 
+    test('Fix numbers preserves a formula with a numeric-looking cached result', () => {
+      const formulaToken = {
+        type: 'formula',
+        value: '=TEXT(1234,"0")',
+        displayValue: '1234',
+      };
+      const data = [['Result'], ['1234']];
+      const cellMeta = [[{ type: 'string', value: 'Result' }], [formulaToken]];
+
+      const result = Cleaner.apply(data, {
+        trim: false,
+        removeEmptyRows: false,
+        removeEmptyColumns: false,
+        removeDuplicates: false,
+        fixNumbers: true,
+        normalizeHeaders: false,
+      }, cellMeta);
+
+      expect(result.data).toEqual(data);
+      expect(result.cellMeta[1][0]).toEqual(formulaToken);
+    });
+
     test('normalizeHeaders updates header cellMeta tokens', () => {
       const data = [['first name', 'eMAIL ADDRESS'], ['Alice', 'alice@example.com']];
       const cellMeta = [
@@ -623,6 +665,102 @@ describe('Cleaner', () => {
       expect(result.cellMeta[0][0].value).toBe('First Name');
       expect(result.cellMeta[0][1].value).toBe('Email Address');
       expect(result.cellMeta[1]).toEqual(cellMeta[1]);
+    });
+
+    test('value transformations never alter non-string tokens', () => {
+      const formula = '=TEXT(1234,"0")';
+      const data = [
+        ['  formula header  ', '  ordinary header  ', 'Number', 'Boolean', 'Date', 'Empty'],
+        [' 1234 ', ' 1,234 ', 42, true, 45306, ''],
+      ];
+      const cellMeta = [
+        [
+          { type: 'formula', value: '=A1', displayValue: '  formula header  ' },
+          { type: 'string', value: '  ordinary header  ' },
+          { type: 'string', value: 'Number' },
+          { type: 'string', value: 'Boolean' },
+          { type: 'string', value: 'Date' },
+          { type: 'string', value: 'Empty' },
+        ],
+        [
+          { type: 'formula', value: formula, displayValue: ' 1234 ' },
+          { type: 'string', value: ' 1,234 ' },
+          { type: 'number', value: 42 },
+          { type: 'boolean', value: true },
+          { type: 'date', value: 45306, formatType: 'DATE' },
+          { type: 'empty' },
+        ],
+      ];
+
+      const result = Cleaner.apply(data, {
+        trim: true,
+        removeEmptyRows: false,
+        removeEmptyColumns: false,
+        removeDuplicates: false,
+        fixNumbers: true,
+        normalizeHeaders: true,
+      }, cellMeta);
+
+      expect(result.data).toEqual([
+        ['  formula header  ', 'Ordinary Header', 'Number', 'Boolean', 'Date', 'Empty'],
+        [' 1234 ', 1234, 42, true, 45306, ''],
+      ]);
+      expect(result.cellMeta[0][0]).toEqual(cellMeta[0][0]);
+      expect(result.cellMeta[1][0]).toEqual(cellMeta[1][0]);
+      expect(result.cellMeta[1][1]).toEqual({ type: 'number', value: 1234 });
+      expect(result.cellMeta[1].slice(2)).toEqual(cellMeta[1].slice(2));
+    });
+
+    test('formula cached as padded text is unchanged by trim and Fix numbers', () => {
+      const formulaToken = {
+        type: 'formula',
+        value: '=TEXT(1234,"0")',
+        displayValue: ' 1234 ',
+      };
+      const data = [['Result', 'Label'], [' 1234 ', '  ordinary  ']];
+      const cellMeta = [
+        [{ type: 'string', value: 'Result' }, { type: 'string', value: 'Label' }],
+        [formulaToken, { type: 'string', value: '  ordinary  ' }],
+      ];
+
+      const result = Cleaner.apply(data, {
+        trim: true,
+        removeEmptyRows: false,
+        removeEmptyColumns: false,
+        removeDuplicates: false,
+        fixNumbers: true,
+        normalizeHeaders: false,
+      }, cellMeta);
+
+      expect(result.data).toEqual([['Result', 'Label'], [' 1234 ', 'ordinary']]);
+      expect(result.cellMeta[1][0]).toEqual(formulaToken);
+      expect(result.cellMeta[1][1]).toEqual({ type: 'string', value: 'ordinary' });
+    });
+
+    test('formula in header row is not title-cased beside ordinary string headers', () => {
+      const formulaToken = {
+        type: 'formula',
+        value: '=A1',
+        displayValue: 'formula header',
+      };
+      const data = [['formula header', 'first name'], ['value', 'Alice']];
+      const cellMeta = [
+        [formulaToken, { type: 'string', value: 'first name' }],
+        [{ type: 'string', value: 'value' }, { type: 'string', value: 'Alice' }],
+      ];
+
+      const result = Cleaner.apply(data, {
+        trim: false,
+        removeEmptyRows: false,
+        removeEmptyColumns: false,
+        removeDuplicates: false,
+        fixNumbers: false,
+        normalizeHeaders: true,
+      }, cellMeta);
+
+      expect(result.data[0]).toEqual(['formula header', 'First Name']);
+      expect(result.cellMeta[0][0]).toEqual(formulaToken);
+      expect(result.cellMeta[0][1]).toEqual({ type: 'string', value: 'First Name' });
     });
   });
 });

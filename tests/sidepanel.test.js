@@ -1283,7 +1283,7 @@ describe('DragToSheetsApp', () => {
       expect(preview.previewMeta.metadataTrusted).toBe(true);
     });
 
-    test('does not represent Fix numbers when sampled Excel metadata is unavailable', async () => {
+    test('does not represent metadata-sensitive cleaning when sampled Excel metadata is unavailable', async () => {
       const app = await createApp();
       jest.spyOn(app, 'runProcessingTask').mockImplementation((type, payload, fallback) => fallback());
       app.files = [{
@@ -1293,12 +1293,14 @@ describe('DragToSheetsApp', () => {
         parsed: null,
         file: new File(['x'], 'untrusted.xlsx'),
       }];
+      document.getElementById('opt-trim').checked = true;
       document.getElementById('opt-numbers').checked = true;
+      document.getElementById('opt-headers').checked = true;
       Parser.preview.mockResolvedValue({
-        sheets: [{ name: 'untrusted', data: [['Value'], ['1,234']] }],
+        sheets: [{ name: 'untrusted', data: [['  Formula Result  ', '  ordinary header  '], [' 1234 ', ' 1,234 ']] }],
         previewMeta: {
           rowCount: 2,
-          colCount: 1,
+          colCount: 2,
           sheetCount: 1,
           sampled: true,
           sampleRows: 2,
@@ -1312,12 +1314,53 @@ describe('DragToSheetsApp', () => {
 
       expect(Cleaner.apply).toHaveBeenCalledWith(
         expect.any(Array),
-        expect.objectContaining({ fixNumbers: false }),
+        expect.objectContaining({ trim: false, fixNumbers: false, normalizeHeaders: false }),
         null
       );
       expect(preview.notices).toContainEqual(expect.stringContaining('Fix numbers'));
       expect(app.previewTable.textContent).toContain('Fix numbers');
-      expect(preview.data[1][0]).toBe('1,234');
+      expect(preview.data).toEqual([
+        ['  Formula Result  ', '  ordinary header  '],
+        [' 1234 ', ' 1,234 '],
+      ]);
+    });
+
+    test('does not represent metadata-sensitive cleaning in merged Excel samples without metadata', async () => {
+      const app = await createApp();
+      jest.spyOn(app, 'runProcessingTask').mockImplementation((type, payload, fallback) => fallback());
+      document.querySelector('input[name="open-mode"][value="merge"]').checked = true;
+      document.getElementById('opt-trim').checked = true;
+      document.getElementById('opt-numbers').checked = true;
+      document.getElementById('opt-headers').checked = true;
+      app.files = [
+        { name: 'a.xlsx', ext: 'xlsx', size: 1024, parsed: null, file: new File(['a'], 'a.xlsx') },
+        { name: 'b.xlsx', ext: 'xlsx', size: 1024, parsed: null, file: new File(['b'], 'b.xlsx') },
+      ];
+      const rawSample = [['Formula Result', 'ordinary header'], [' 1234 ', ' 1,234 ']];
+      Parser.preview
+        .mockResolvedValueOnce({
+          sheets: [{ name: 'a', data: rawSample }],
+          previewMeta: { rowCount: 2, colCount: 2, sheetCount: 1, sampled: true, sampleRows: 2, metadataTrusted: false },
+        })
+        .mockResolvedValueOnce({
+          sheets: [{ name: 'b', data: rawSample }],
+          previewMeta: { rowCount: 2, colCount: 2, sheetCount: 1, sampled: true, sampleRows: 2, metadataTrusted: false },
+        });
+      Merger.merge.mockReturnValue({
+        sheets: [{ name: 'Merged', data: rawSample, cellMeta: null }],
+        sourceMap: [],
+      });
+      Cleaner.apply.mockImplementation((data, options, cellMeta) => ({ data, cellMeta }));
+
+      const preview = await app.getResponsiveMergePreview(app.getCleaningOptions());
+
+      expect(Cleaner.apply).toHaveBeenCalledWith(
+        expect.any(Array),
+        expect.objectContaining({ trim: false, fixNumbers: false, normalizeHeaders: false }),
+        null
+      );
+      expect(preview.notices).toContainEqual(expect.stringContaining('Normalize headers'));
+      expect(preview.merged.sheets[0].data).toEqual(rawSample);
     });
 
     test('sampled separate preview applies trim and fixNumbers', async () => {

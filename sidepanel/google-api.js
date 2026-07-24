@@ -686,13 +686,10 @@ const GoogleAPI = (() => {
         for (let c = 0; c < cells.length; c++) {
           const cell = cells[c] || {};
           const uev = cell.userEnteredValue || {};
-          const fmtType = cell.effectiveFormat?.numberFormat?.type;
-
-          if (Object.keys(uev).length === 0) continue;
-          if (uev.formulaValue !== undefined) continue;
-          if (fmtType === 'DATE' || fmtType === 'TIME' || fmtType === 'DATE_TIME') continue;
-          if (uev.boolValue !== undefined) continue;
-          if (uev.numberValue !== undefined) continue;
+          const token = typeof Cleaner !== 'undefined' && Cleaner.tokenFromCellData
+            ? Cleaner.tokenFromCellData(cell)
+            : tokenFromCellDataFallback(cell);
+          if (!token || token.type !== 'string') continue;
 
           const raw = uev.stringValue;
           if (raw === undefined || raw === '') continue;
@@ -701,7 +698,7 @@ const GoogleAPI = (() => {
           let cur = raw;
           let changed = false;
           let valueIsNumber = false;
-          const isTextFormatted = fmtType === 'TEXT';
+          const isTextFormatted = token.formatType === 'TEXT';
 
           if (options.normalizeHeaders && r === 0) {
             const normalized = normalizeHeaderTitleCase(cur);
@@ -748,7 +745,11 @@ const GoogleAPI = (() => {
     if (fmtType === 'DATE' || fmtType === 'TIME' || fmtType === 'DATE_TIME') return { type: 'date', value: uev.numberValue, formatType: fmtType };
     if (uev.boolValue !== undefined) return { type: 'boolean', value: uev.boolValue };
     if (uev.numberValue !== undefined) return { type: 'number', value: uev.numberValue };
-    if (uev.stringValue !== undefined && uev.stringValue !== '') return { type: 'string', value: uev.stringValue };
+    if (uev.stringValue !== undefined && uev.stringValue !== '') {
+      const token = { type: 'string', value: uev.stringValue };
+      if (fmtType === 'TEXT') token.formatType = 'TEXT';
+      return token;
+    }
     return { type: 'empty' };
   }
   function rowComparisonKeyFallback(tokens, shouldTrim, excludedCols) {

@@ -77,10 +77,12 @@ const Cleaner = (() => {
   function trimWhitespace(data, meta) {
     const trimmedData = data.map((row, ri) =>
       row.map((cell, ci) => {
+        const token = meta && meta[ri] ? meta[ri][ci] : null;
+        if (meta && (!token || token.type !== 'string')) return cell;
         if (typeof cell === 'string') {
           const trimmed = cell.trim();
-          if (meta && meta[ri] && meta[ri][ci] && meta[ri][ci].type === 'string') {
-            meta[ri][ci].value = trimmed;
+          if (token) {
+            token.value = trimmed;
           }
           return trimmed;
         }
@@ -221,7 +223,9 @@ const Cleaner = (() => {
       if (rowIndex === 0) return row;
       return row.map((cell, colIndex) => {
         if (typeof cell !== 'string') return cell;
-        if (meta && meta[rowIndex] && meta[rowIndex][colIndex] && meta[rowIndex][colIndex].formatType === 'TEXT') return cell;
+        const token = meta && meta[rowIndex] ? meta[rowIndex][colIndex] : null;
+        if (meta && (!token || token.type !== 'string')) return cell;
+        if (token && token.formatType === 'TEXT') return cell;
         const trimmed = cell.trim();
         if (trimmed === '') return cell;
 
@@ -229,7 +233,11 @@ const Cleaner = (() => {
         if (/^-?\d+(\.\d+)?$/.test(cleaned)) {
           if (cleaned.length > 1 && cleaned.startsWith('0') && !cleaned.startsWith('0.')) {
             if (newMeta && newMeta[rowIndex] && newMeta[rowIndex][colIndex]) {
-              newMeta[rowIndex][colIndex] = { type: 'string', value: cleaned };
+              newMeta[rowIndex][colIndex] = {
+                ...newMeta[rowIndex][colIndex],
+                type: 'string',
+                value: cleaned,
+              };
             }
             return cleaned;
           }
@@ -260,14 +268,16 @@ const Cleaner = (() => {
 
     const result = [...data];
     result[0] = data[0].map((header, ci) => {
+      const token = meta && meta[0] ? meta[0][ci] : null;
+      if (meta && (!token || token.type !== 'string')) return header;
       if (typeof header !== 'string') return header;
       const normalized = header
         .trim()
         .replace(/\s+/g, ' ')
         .toLowerCase()
         .replace(/\b\w/g, (ch) => ch.toUpperCase());
-      if (meta && meta[0] && meta[0][ci] && meta[0][ci].type === 'string') {
-        meta[0][ci].value = normalized;
+      if (token) {
+        token.value = normalized;
       }
       return normalized;
     });
@@ -326,7 +336,11 @@ const Cleaner = (() => {
     if (fmtType === 'DATE' || fmtType === 'TIME' || fmtType === 'DATE_TIME') return { type: 'date', value: uev.numberValue, formatType: fmtType };
     if (uev.boolValue !== undefined) return { type: 'boolean', value: uev.boolValue };
     if (uev.numberValue !== undefined) return { type: 'number', value: uev.numberValue };
-    if (uev.stringValue !== undefined && uev.stringValue !== '') return { type: 'string', value: uev.stringValue };
+    if (uev.stringValue !== undefined && uev.stringValue !== '') {
+      const token = { type: 'string', value: uev.stringValue };
+      if (fmtType === 'TEXT') token.formatType = 'TEXT';
+      return token;
+    }
     return { type: 'empty' };
   }
 
