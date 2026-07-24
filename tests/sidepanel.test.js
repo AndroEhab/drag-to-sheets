@@ -55,6 +55,16 @@ global.lucide = {
   createIcons: jest.fn(),
 };
 
+global.FileHandleStore = {
+  saveHandle: jest.fn().mockResolvedValue('mock-handle-id'),
+  getHandle: jest.fn().mockResolvedValue(null),
+  deleteHandle: jest.fn().mockResolvedValue(undefined),
+  verifyWritePermission: jest.fn().mockResolvedValue(false),
+  writeToHandle: jest.fn().mockResolvedValue(undefined),
+  saveDirHandle: jest.fn().mockResolvedValue('mock-dir-id'),
+  generateId: jest.fn(() => 'mock-id'),
+};
+
 // ---- Load sidepanel module (expose class without auto-instantiation) ----
 
 let spCode = fs.readFileSync(path.resolve(__dirname, '../sidepanel/sidepanel.js'), 'utf-8');
@@ -389,6 +399,250 @@ describe('DragToSheetsApp', () => {
 
       expect(app.files).toHaveLength(1);
       expect(app.files[0].parsed.sheets[0].name).toBe('large');
+    });
+
+    test('prunes lazy Excel entry without parsed data, file, or recoverable handle', async () => {
+      chrome.storage.session.get.mockResolvedValue({
+        files: [{
+          name: 'lazy.xlsx',
+          ext: 'xlsx',
+          size: 1024,
+          stats: null,
+          lazy: true,
+          sheets: null,
+          handleId: null,
+        }],
+      });
+      chrome.storage.local.get.mockResolvedValue({});
+
+      const app = await createApp();
+
+      expect(app.files).toHaveLength(0);
+      expect(app._prunedDuringRestore).toEqual(['lazy.xlsx']);
+      expect(app.loadingText.textContent).toContain('Re-add to continue');
+    });
+
+    test('prunes lazy XLS entry without parsed data, file, or recoverable handle', async () => {
+      chrome.storage.session.get.mockResolvedValue({
+        files: [{
+          name: 'legacy.xls',
+          ext: 'xls',
+          size: 2048,
+          stats: null,
+          lazy: true,
+          sheets: null,
+          handleId: null,
+        }],
+      });
+      chrome.storage.local.get.mockResolvedValue({});
+
+      const app = await createApp();
+
+      expect(app.files).toHaveLength(0);
+      expect(app._prunedDuringRestore).toEqual(['legacy.xls']);
+      expect(app.loadingText.textContent).toContain('Re-add to continue');
+    });
+
+    test('restores parsed-file entry without File object', async () => {
+      chrome.storage.session.get.mockResolvedValue({
+        files: [{
+          name: 'parsed.csv',
+          ext: 'csv',
+          size: 512,
+          sheets: [{ name: 'Sheet1', data: [['A'], ['1']] }],
+          lazy: false,
+          handleId: null,
+        }],
+      });
+      chrome.storage.local.get.mockResolvedValue({});
+
+      const app = await createApp();
+
+      expect(app.files).toHaveLength(1);
+      expect(app.files[0].name).toBe('parsed.csv');
+      expect(app.files[0].parsed).toBeTruthy();
+      expect(app.files[0].file).toBeNull();
+      expect(app._prunedDuringRestore).toEqual([]);
+    });
+
+    test('restores entry with recoverable file handle', async () => {
+      const mockHandle = {
+        kind: 'file',
+        getFile: jest.fn().mockResolvedValue(new File(['x'], 'recovered.xlsx')),
+        queryPermission: jest.fn().mockResolvedValue('granted'),
+      };
+      FileHandleStore.getHandle.mockResolvedValueOnce(mockHandle);
+
+      chrome.storage.session.get.mockResolvedValue({
+        files: [{
+          name: 'recovered.xlsx',
+          ext: 'xlsx',
+          size: 4096,
+          stats: null,
+          lazy: true,
+          sheets: null,
+          handleId: 'test-handle-abc',
+        }],
+      });
+      chrome.storage.local.get.mockResolvedValue({});
+
+      const app = await createApp();
+
+      expect(app.files).toHaveLength(1);
+      expect(app.files[0].name).toBe('recovered.xlsx');
+      expect(app.files[0].file).toBeTruthy();
+      expect(app.files[0].file.name).toBe('recovered.xlsx');
+      expect(app.files[0].lazy).toBe(true);
+      expect(app._prunedDuringRestore).toEqual([]);
+    });
+
+    test('prunes entry when handle recovery fails', async () => {
+      FileHandleStore.getHandle.mockRejectedValueOnce(new Error('Handle not found'));
+
+      chrome.storage.session.get.mockResolvedValue({
+        files: [{
+          name: 'missing.xlsx',
+          ext: 'xlsx',
+          size: 2048,
+          stats: null,
+          lazy: true,
+          sheets: null,
+          handleId: 'invalid-handle',
+        }],
+      });
+      chrome.storage.local.get.mockResolvedValue({});
+
+      const app = await createApp();
+
+      expect(app.files).toHaveLength(0);
+      expect(app._prunedDuringRestore).toEqual(['missing.xlsx']);
+      expect(app.loadingText.textContent).toContain('Re-add to continue');
+    });
+
+    test('prunes entry when file handle is returned but getFile fails', async () => {
+      const mockHandle = {
+        kind: 'file',
+        getFile: jest.fn().mockRejectedValue(new Error('Permission denied')),
+      };
+      FileHandleStore.getHandle.mockResolvedValueOnce(mockHandle);
+
+      chrome.storage.session.get.mockResolvedValue({
+        files: [{
+          name: 'blocked.xlsx',
+          ext: 'xlsx',
+          size: 1024,
+          stats: null,
+          lazy: true,
+          sheets: null,
+          handleId: 'blocked-handle',
+        }],
+      });
+      chrome.storage.local.get.mockResolvedValue({});
+
+      const app = await createApp();
+
+      expect(app.files).toHaveLength(0);
+      expect(app._prunedDuringRestore).toEqual(['blocked.xlsx']);
+    });
+
+    test('keeps only valid entries from a mixed batch, pruning invalid ones', async () => {
+      // Valid: parsed CSV
+      // Invalid: lazy XLSX without handle
+      // Valid: recoverable XLSX with handle
+      const mockHandle = {
+        kind: 'file',
+        getFile: jest.fn().mockResolvedValue(new File(['d'], 'good.xlsx')),
+        queryPermission: jest.fn().mockResolvedValue('granted'),
+      };
+      FileHandleStore.getHandle.mockResolvedValueOnce(mockHandle);
+
+      chrome.storage.session.get.mockResolvedValue({
+        files: [
+          {
+            name: 'good.csv',
+            ext: 'csv',
+            size: 256,
+            sheets: [{ name: 'S1', data: [['A']] }],
+            lazy: false,
+            handleId: null,
+          },
+          {
+            name: 'bad.xlsx',
+            ext: 'xlsx',
+            size: 512,
+            stats: null,
+            lazy: true,
+            sheets: null,
+            handleId: null,
+          },
+          {
+            name: 'good.xlsx',
+            ext: 'xlsx',
+            size: 1024,
+            stats: null,
+            lazy: true,
+            sheets: null,
+            handleId: 'good-handle',
+          },
+        ],
+      });
+      chrome.storage.local.get.mockResolvedValue({});
+
+      const app = await createApp();
+
+      expect(app.files).toHaveLength(2);
+      expect(app.files.map((f) => f.name)).toEqual(['good.csv', 'good.xlsx']);
+      expect(app._prunedDuringRestore).toEqual(['bad.xlsx']);
+      expect(app.loadingText.textContent).toContain('2 file(s) restored');
+      expect(app.loadingText.textContent).toContain('Re-add to continue');
+      expect(app.loadingText.textContent).toContain('"bad.xlsx"');
+    });
+
+    test('does not prune entry when parsed data is available even without file', async () => {
+      chrome.storage.session.get.mockResolvedValue({
+        files: [{
+          name: 'data.xlsx',
+          ext: 'xlsx',
+          size: 8192,
+          sheets: [{ name: 'Data', data: [['B', 'C'], ['2', '3']] }],
+          lazy: false,
+          handleId: null,
+        }],
+      });
+      chrome.storage.local.get.mockResolvedValue({});
+
+      const app = await createApp();
+
+      expect(app.files).toHaveLength(1);
+      expect(app.files[0].name).toBe('data.xlsx');
+      expect(app.files[0].parsed).toBeTruthy();
+      expect(app._prunedDuringRestore).toEqual([]);
+    });
+
+    test('persists handleId in session storage serialization', async () => {
+      const app = await createApp();
+      app.files = [
+        {
+          name: 'lazy.xlsx',
+          ext: 'xlsx',
+          size: 1024,
+          parsed: null,
+          stats: null,
+          identityKey: 'lazy.xlsx::xlsx::1024::0',
+          contentFingerprint: null,
+          lazy: true,
+          handleId: 'saved-handle-123',
+          file: new File(['x'], 'lazy.xlsx'),
+        },
+      ];
+      chrome.storage.session.set.mockClear();
+
+      app.saveFilesSession();
+
+      expect(chrome.storage.session.set).toHaveBeenCalled();
+      const callArg = chrome.storage.session.set.mock.calls[0][0];
+      expect(callArg.files[0].handleId).toBe('saved-handle-123');
+      expect(callArg.files[0].lazy).toBe(true);
     });
   });
 

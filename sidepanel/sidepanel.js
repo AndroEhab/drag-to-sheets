@@ -1186,6 +1186,7 @@
         identityKey: item.identityKey || null,
         contentFingerprint: item.contentFingerprint || null,
         lazy: Boolean(item.lazy && !item.parsed),
+        handleId: item.handleId || null,
         sheets: item.parsed
           ? item.parsed.sheets.map(({ name, data }) => ({ name, data }))
           : null,
@@ -1198,6 +1199,7 @@
         identityKey: item.identityKey || null,
         contentFingerprint: item.contentFingerprint || null,
         lazy: Boolean(item.lazy && !item.parsed),
+        handleId: item.handleId || null,
         file: item.file || null,
         parsed: item.parsed
           ? {
@@ -1263,6 +1265,7 @@
      * Restores files (without original File objects) and all preferences.
      */
     async restoreSession() {
+      this._prunedDuringRestore = [];
       try {
         const [{ files: storedFiles, sessionSummary }, { prefs }] = await Promise.all([
           chrome.storage.session.get(['files', 'sessionSummary']),
@@ -1278,7 +1281,7 @@
 
         // Restore files
         if (Array.isArray(restoredFiles) && restoredFiles.length > 0) {
-          this.files = restoredFiles.map((item) => ({
+          const mapped = restoredFiles.map((item) => ({
             file: item.file || null,
             parsed: item.parsed || (Array.isArray(item.sheets) ? { sheets: item.sheets } : null),
             name: item.name,
@@ -1288,7 +1291,44 @@
             identityKey: item.identityKey || `${item.name}::${item.ext}::${item.size || 0}::0`,
             contentFingerprint: item.contentFingerprint || null,
             lazy: Boolean(item.lazy && !item.sheets),
+            handleId: item.handleId || null,
+            fileHandle: null,
           }));
+
+          const validEntries = [];
+          const prunedNames = [];
+
+          for (const entry of mapped) {
+            if (entry.parsed) {
+              validEntries.push(entry);
+              continue;
+            }
+
+            if (entry.file && entry.file.name) {
+              validEntries.push(entry);
+              continue;
+            }
+
+            if (entry.handleId && typeof FileHandleStore !== 'undefined') {
+              try {
+                const handle = await FileHandleStore.getHandle(entry.handleId);
+                if (handle && typeof handle.getFile === 'function') {
+                  const file = await handle.getFile();
+                  if (file && file.name) {
+                    entry.file = file;
+                    entry.fileHandle = handle;
+                    validEntries.push(entry);
+                    continue;
+                  }
+                }
+              } catch (_) { /* handle recovery not possible */ }
+            }
+
+            prunedNames.push(entry.name);
+          }
+
+          this.files = validEntries;
+          this._prunedDuringRestore = prunedNames;
           this.rebuildFingerprints();
           this.markFilesChanged();
         }
@@ -1349,8 +1389,21 @@
       this.renderFileList();
       this.updateUI();
 
+      const pruned = this._prunedDuringRestore || [];
       if (this.files.length > 0) {
-        this.setStatus(`Restored ${this.files.length} file(s) from last session`, 'info');
+        if (pruned.length > 0) {
+          this.setStatus(
+            `${this.files.length} file(s) restored. Re-add to continue: ${pruned.map((n) => `"${n}"`).join(', ')}`,
+            'info'
+          );
+        } else {
+          this.setStatus(`Restored ${this.files.length} file(s) from last session`, 'info');
+        }
+      } else if (pruned.length > 0) {
+        this.setStatus(
+          `Re-add to continue: ${pruned.map((n) => `"${n}"`).join(', ')}`,
+          'info'
+        );
       } else if (this.sessionSummary && this.sessionSummary.persisted === false) {
         this.setStatus(
           `Large batch (${this.sessionSummary.fileCount} file(s), ${this.formatBytes(this.sessionSummary.totalBytes)}) was not restored to keep memory usage stable`,
