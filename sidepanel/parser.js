@@ -143,6 +143,31 @@ const Parser = (() => {
     return { colCount: maxCols, rows };
   }
 
+  /**
+   * Normalize an Excel table without stringifying native cell values.
+   * Excel metadata and the final parse path both rely on numbers, booleans,
+   * and serial date values remaining typed in the data matrix.
+   */
+  function normalizeNativeTable(data, colCountOverride) {
+    const maxCols = colCountOverride == null
+      ? data.reduce((max, row) => Math.max(max, row.length), 0)
+      : colCountOverride;
+    const rows = new Array(data.length);
+    for (let r = 0; r < data.length; r++) {
+      const src = data[r] || [];
+      const dest = new Array(maxCols);
+      const len = Math.min(src.length, maxCols);
+      for (let c = 0; c < len; c++) {
+        dest[c] = src[c] == null ? '' : src[c];
+      }
+      for (let c = len; c < maxCols; c++) {
+        dest[c] = '';
+      }
+      rows[r] = dest;
+    }
+    return { colCount: maxCols, rows };
+  }
+
   function trimTrailingEmptyRows(rows) {
     while (rows.length > 0 && rows[rows.length - 1].every((c) => c === '')) {
       rows.pop();
@@ -193,14 +218,44 @@ const Parser = (() => {
     const sampleRows = options.sampleRows || DEFAULT_PREVIEW_ROWS;
     const workbook = XLSX.read(arrayBuffer, {
       type: 'array',
-      cellStyles: false,
+      cellStyles: true,
+      cellNF: true,
       sheetRows: sampleRows,
     });
 
     const name = workbook.SheetNames[0] || 'Sheet1';
     const sheet = workbook.Sheets[name];
     const sampleData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-    const normalized = normalizeTable(trimTrailingEmptyRows(sampleData));
+    let sampleColCount = sampleData.reduce((max, row) => Math.max(max, row.length), 0);
+    const sampleRef = sheet?.['!ref'];
+    if (sampleRef && typeof XLSX.utils.decode_range === 'function') {
+      try {
+        const range = XLSX.utils.decode_range(sampleRef);
+        sampleColCount = Math.max(sampleColCount, range.e.c - range.s.c + 1);
+      } catch (_) {
+        // Keep the column width derived from the sampled values.
+      }
+    }
+    const normalized = normalizeNativeTable(sampleData, sampleColCount);
+    const cellMeta = buildCellMeta(sheet, normalized.rows.length, normalized.colCount);
+
+    // Keep formula rows even when their cached display value is empty, while
+    // removing trailing rows that are genuinely empty in both matrices.
+    while (normalized.rows.length > 1) {
+      const lastIndex = normalized.rows.length - 1;
+      const isEmpty = normalized.rows[lastIndex].every((value, ci) => {
+        const token = cellMeta[lastIndex]?.[ci];
+        if (token?.type === 'formula') return false;
+        if (token?.type === 'empty') {
+          return value === '' || value === null || value === undefined;
+        }
+        if (token?.type === 'string') return String(token.value || '').trim().length === 0;
+        return value === '' || value === null || value === undefined;
+      });
+      if (!isEmpty) break;
+      normalized.rows.pop();
+      cellMeta.pop();
+    }
     const fullRef = sheet?.['!fullref'] || sheet?.['!ref'];
 
     let rowCount = normalized.rows.length;
@@ -211,8 +266,8 @@ const Parser = (() => {
       colCount = range.e.c - range.s.c + 1;
     }
 
-    return {
-      sheets: [{ name, data: normalized.rows }],
+    const result = {
+      sheets: [{ name, data: normalized.rows, cellMeta }],
       previewMeta: {
         rowCount,
         colCount,
@@ -222,6 +277,8 @@ const Parser = (() => {
         fileSize: options.fileSize || 0,
       },
     };
+    result.previewMeta.metadataTrusted = hasTypedCellMetadata(result);
+    return result;
   }
 
   /**
@@ -415,6 +472,7 @@ const Parser = (() => {
     const workbook = XLSX.read(arrayBuffer, {
       type: 'array',
       cellStyles: true,
+      cellNF: true,
       bookFiles: true,
     });
     const themeColors = extractWorkbookThemeColors(workbook);
@@ -520,7 +578,7 @@ const Parser = (() => {
 
     // Formula cells — preserve formula string
     if (f !== undefined && f !== null) {
-      return { type: 'formula', value: f, displayValue: v };
+      return { type: 'formula', value: f, displayValue: v == null ? '' : v };
     }
 
     // Date/time determined by number format
@@ -557,7 +615,10 @@ const Parser = (() => {
     if (!z || typeof z !== 'string') return undefined;
     if (z === '@') return 'TEXT';
 
-    const hasDate = /[dmy]{1,4}/i.test(z);
+    // "m" is ambiguous in Excel formats (month vs minute).  Treat it as a
+    // date component only when the format also contains an unambiguous day or
+    // year marker; h:mm and mm:ss are times.
+    const hasDate = /[dy]/i.test(z);
     const hasTime = /h{1,2}|s{1,2}/i.test(z);
 
     if (hasDate && hasTime) return 'DATE_TIME';
@@ -763,6 +824,7 @@ const Parser = (() => {
                 sampled: true,
                 sampleRows: result.sheets[0]?.data.length || 0,
                 fileSize: file.size || 0,
+                metadataTrusted: hasTypedCellMetadata(result),
               },
             };
           } else if (ext === 'xls') {
@@ -777,6 +839,7 @@ const Parser = (() => {
                 sampled: true,
                 sampleRows: result.sheets[0]?.data.length || 0,
                 fileSize: file.size || 0,
+                metadataTrusted: hasTypedCellMetadata(result),
               },
             };
           }

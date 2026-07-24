@@ -1,6 +1,7 @@
 const { loadModule } = require('./helpers');
 
 const Parser = loadModule('../sidepanel/parser.js', 'Parser');
+const Cleaner = loadModule('../sidepanel/cleaner.js', 'Cleaner');
 
 /** Create a File with _content and _buffer attached for the MockFileReader */
 function makeFile(name, textContent) {
@@ -350,7 +351,74 @@ describe('Parser', () => {
       expect(result.previewMeta.rowCount).toBe(500);
       expect(result.previewMeta.colCount).toBe(2);
       expect(result.previewMeta.sampled).toBe(true);
-      expect(result.sheets[0].data[1]).toEqual(['Alice', '30']);
+      expect(result.sheets[0].data[1]).toEqual(['Alice', 30]);
+    });
+
+    test('preserves sampled Excel metadata and cleaning semantics for typed cells', async () => {
+      const formula = '=IF(FALSE,"x","")';
+      global.XLSX.read.mockReturnValue({
+        SheetNames: ['Sheet1'],
+        Sheets: {
+          Sheet1: {
+            '!ref': 'A1:F2',
+            '!fullref': 'A1:F3',
+            A1: { v: 'Text', t: 's' },
+            B1: { v: 'Number', t: 's' },
+            C1: { v: 'Formula', t: 's' },
+            D1: { v: 'Date', t: 's' },
+            E1: { v: 'Time', t: 's' },
+            F1: { v: 'Boolean', t: 's' },
+            A2: { v: '1,234', t: 's', z: '@' },
+            B2: { v: 1234, t: 'n', z: '#,##0' },
+            C2: { v: '', t: 'str', f: formula },
+            D2: { v: 45292, t: 'n', z: 'm/d/yy' },
+            E2: { v: 0.5, t: 'n', z: 'h:mm' },
+            F2: { v: true, t: 'b' },
+          },
+        },
+      });
+      global.XLSX.utils.sheet_to_json.mockReturnValue([
+        ['Text', 'Number', 'Formula', 'Date', 'Time', 'Boolean'],
+        ['1,234', 1234, '', 45292, 0.5, true],
+      ]);
+      global.XLSX.utils.decode_range = jest.fn((ref) =>
+        ref === 'A1:F3'
+          ? { s: { r: 0, c: 0 }, e: { r: 2, c: 5 } }
+          : { s: { r: 0, c: 0 }, e: { r: 1, c: 5 } }
+      );
+
+      const result = await Parser.preview(makeExcelFile('typed-preview.xlsx'), { sampleRows: 2 });
+      const sheet = result.sheets[0];
+
+      expect(sheet.data).toEqual([
+        ['Text', 'Number', 'Formula', 'Date', 'Time', 'Boolean'],
+        ['1,234', 1234, '', 45292, 0.5, true],
+      ]);
+      expect(sheet.cellMeta[1]).toEqual([
+        { type: 'string', value: '1,234', formatType: 'TEXT' },
+        { type: 'number', value: 1234 },
+        { type: 'formula', value: formula, displayValue: '' },
+        { type: 'date', value: 45292, formatType: 'DATE' },
+        { type: 'date', value: 0.5, formatType: 'TIME' },
+        { type: 'boolean', value: true },
+      ]);
+      expect(result.previewMeta.metadataTrusted).toBe(true);
+
+      const cleaned = Cleaner.apply(
+        sheet.data,
+        {
+          trim: false,
+          removeEmptyRows: false,
+          removeEmptyColumns: false,
+          removeDuplicates: false,
+          fixNumbers: true,
+          normalizeHeaders: false,
+        },
+        sheet.cellMeta
+      );
+
+      expect(cleaned.data).toEqual(sheet.data);
+      expect(cleaned.cellMeta[1]).toEqual(sheet.cellMeta[1]);
     });
 
     test('always extracts cell styles for excel files', async () => {

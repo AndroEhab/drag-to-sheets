@@ -799,13 +799,22 @@ describe('Merger', () => {
     });
 
     test('duplicate headers: formula returning empty string wins mapped position, metadata follows', () => {
+      const formula = '=IF(FALSE,"x","")';
       const f1 = {
         sheets: [{
           name: 'S1',
-          data: [['Col', 'Col'], ['=IF(FALSE,"x","")', 'real']],
+          data: [['Col', 'Col', 'Col'], ['', 'real', 'later literal']],
           cellMeta: [
-            [{ type: 'string', value: 'Col' }, { type: 'string', value: 'Col' }],
-            [{ type: 'formula', value: '=IF(FALSE,"x","")', displayValue: '' }, { type: 'string', value: 'real' }],
+            [
+              { type: 'string', value: 'Col' },
+              { type: 'string', value: 'Col' },
+              { type: 'string', value: 'Col' },
+            ],
+            [
+              { type: 'formula', value: formula, displayValue: '' },
+              { type: 'string', value: 'real' },
+              { type: 'string', value: 'later literal' },
+            ],
           ],
         }],
       };
@@ -818,10 +827,11 @@ describe('Merger', () => {
       };
       const result = Merger.merge([f1, f2]);
       const meta = result.sheets[0].cellMeta;
-      // f1 row: both Col columns map to index 0. First 'Col' has formula="=IF(FALSE,"x","")" (display ''),
-      // the formula token wins first position. Metadata from the FIRST winning source cell should be formula.
-      expect(meta[1][0].type).toBe('formula');
-      expect(meta[1][0].value).toBe('=IF(FALSE,"x","")');
+      // The formula source has an empty cached display value, but its token
+      // occupies the destination and prevents later duplicate literals from
+      // replacing the paired data/token selection.
+      expect(result.sheets[0].data[1][0]).toBe('');
+      expect(meta[1][0]).toEqual({ type: 'formula', value: formula, displayValue: '' });
       // f2 row should come through
       expect(meta[2][0]).toEqual({ type: 'string', value: 'other' });
     });

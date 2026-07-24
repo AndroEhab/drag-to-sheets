@@ -2,6 +2,8 @@
 
 const GoogleAPI = loadModule('../sidepanel/google-api.js', 'GoogleAPI');
 const Cleaner = loadModule('../sidepanel/cleaner.js', 'Cleaner');
+const Merger = loadModule('../sidepanel/merger.js', 'Merger');
+const Parser = loadModule('../sidepanel/parser.js', 'Parser');
 
 describe('GoogleAPI', () => {
   beforeEach(() => {
@@ -2015,11 +2017,145 @@ describe('GoogleAPI', () => {
         { name: 'Big', data: rows, cellMeta },
       ]);
 
-      const batchCalls = global.fetch.mock.calls.filter((call) =>
-        call[0].includes('batchUpdate')
+      const calls = global.fetch.mock.calls;
+      const creationCalls = calls.filter((call) =>
+        call[0] === 'https://sheets.googleapis.com/v4/spreadsheets'
       );
-      // At least 2 batchUpdate calls (typed chunks) + possibly format
-      expect(batchCalls.length).toBeGreaterThanOrEqual(2);
+      const metadataCalls = calls.filter((call) =>
+        call[0].includes('/spreadsheets/s1?includeGridData=false')
+      );
+      const batchCalls = calls.filter((call) =>
+        call[0] === 'https://sheets.googleapis.com/v4/spreadsheets/s1:batchUpdate'
+      );
+      const typedValueCalls = batchCalls.filter((call) => {
+        const body = JSON.parse(call[1].body);
+        return body.requests.some((request) => request.updateCells?.fields?.includes('userEnteredValue'));
+      });
+      const autoResizeCalls = batchCalls.filter((call) => {
+        const body = JSON.parse(call[1].body);
+        return body.requests.some((request) => request.autoResizeDimensions);
+      });
+
+      expect(creationCalls).toHaveLength(1);
+      expect(metadataCalls).toHaveLength(1);
+      expect(typedValueCalls.length).toBeGreaterThanOrEqual(2);
+      expect(autoResizeCalls).toHaveLength(1);
+
+      for (const call of typedValueCalls) {
+        const body = JSON.parse(call[1].body);
+        const cellCount = body.requests.reduce((sum, request) => {
+          const range = request.updateCells.range;
+          return sum + (range.endRowIndex - range.startRowIndex) *
+            (range.endColumnIndex - range.startColumnIndex);
+        }, 0);
+        expect(cellCount).toBeLessThanOrEqual(GoogleAPI.MAX_VALUE_CELLS_PER_REQUEST);
+      }
+    });
+
+    test('typed output keeps the selected empty-result formula over a later duplicate literal', async () => {
+      const formula = '=IF(FALSE,"x","")';
+      const merged = Merger.merge([
+        {
+          sheets: [{
+            name: 'A',
+            data: [['Col', 'Col', 'Col'], ['', 'real', 'later literal']],
+            cellMeta: [
+              [
+                { type: 'string', value: 'Col' },
+                { type: 'string', value: 'Col' },
+                { type: 'string', value: 'Col' },
+              ],
+              [
+                { type: 'formula', value: formula, displayValue: '' },
+                { type: 'string', value: 'real' },
+                { type: 'string', value: 'later literal' },
+              ],
+            ],
+          }],
+        },
+        {
+          sheets: [{
+            name: 'B',
+            data: [['Col'], ['other']],
+            cellMeta: [[{ type: 'string', value: 'Col' }], [{ type: 'string', value: 'other' }]],
+          }],
+        },
+      ]);
+
+      expect(merged.sheets[0].data[1][0]).toBe('');
+      expect(merged.sheets[0].cellMeta[1][0]).toEqual({ type: 'formula', value: formula, displayValue: '' });
+
+      mockFetchSequence(
+        { spreadsheetId: 's1', spreadsheetUrl: 'url', sheets: [{ properties: { sheetId: 0, title: 'Merged' } }] },
+        { sheets: [{ properties: { sheetId: 0, title: 'Merged' } }] },
+        {},
+        {}
+      );
+
+      await GoogleAPI.createSpreadsheet('Formula merge', merged.sheets);
+
+      const typedCall = global.fetch.mock.calls.find((call) => {
+        if (!call[0].endsWith('/s1:batchUpdate')) return false;
+        const body = JSON.parse(call[1].body);
+        return body.requests.some((request) => request.updateCells?.fields?.includes('userEnteredValue'));
+      });
+      const body = JSON.parse(typedCall[1].body);
+      const formulaValue = body.requests[0].updateCells.rows[1].values[0].userEnteredValue.formulaValue;
+      expect(formulaValue).toBe(formula);
+    });
+
+    test('actual large CSV merge output keeps typed writes bounded across HTTP requests', async () => {
+      const rowCount = 300;
+      const colCount = 100;
+      const makeCsvFile = (name, offset) => {
+        const headers = Array.from({ length: colCount }, (_, ci) => `C${ci}`);
+        const rows = [headers];
+        for (let ri = 0; ri < rowCount; ri++) {
+          rows.push(Array.from({ length: colCount }, (_, ci) => `${offset + ri}-${ci}`));
+        }
+        const content = rows.map((row) => row.join(',')).join('\n');
+        const file = new File([content], name);
+        file._buffer = new TextEncoder().encode(content).buffer;
+        return file;
+      };
+
+      const parsedFiles = await Promise.all([
+        Parser.parse(makeCsvFile('large-a.csv', 0)),
+        Parser.parse(makeCsvFile('large-b.csv', rowCount)),
+      ]);
+      const merged = Merger.merge(parsedFiles);
+
+      expect(merged.sheets[0].cellMeta).toBeTruthy();
+      expect(merged.sheets[0].data).toHaveLength(rowCount * 2 + 1);
+
+      mockFetchSequence(
+        { spreadsheetId: 's1', spreadsheetUrl: 'url', sheets: [{ properties: { sheetId: 0, title: 'Merged' } }] },
+        { sheets: [{ properties: { sheetId: 0, title: 'Merged' } }] },
+        {},
+        {},
+        {}
+      );
+
+      await GoogleAPI.createSpreadsheet('Large CSV merge', merged.sheets);
+
+      const batchCalls = global.fetch.mock.calls.filter((call) =>
+        call[0] === 'https://sheets.googleapis.com/v4/spreadsheets/s1:batchUpdate'
+      );
+      const typedCalls = batchCalls.filter((call) => {
+        const body = JSON.parse(call[1].body);
+        return body.requests.some((request) => request.updateCells?.fields?.includes('userEnteredValue'));
+      });
+
+      expect(typedCalls.length).toBeGreaterThanOrEqual(2);
+      for (const call of typedCalls) {
+        const body = JSON.parse(call[1].body);
+        const cells = body.requests.reduce((sum, request) => {
+          const range = request.updateCells.range;
+          return sum + (range.endRowIndex - range.startRowIndex) *
+            (range.endColumnIndex - range.startColumnIndex);
+        }, 0);
+        expect(cells).toBeLessThanOrEqual(GoogleAPI.MAX_VALUE_CELLS_PER_REQUEST);
+      }
     });
 
     test('pure CSV merge uses RAW path not typed', async () => {

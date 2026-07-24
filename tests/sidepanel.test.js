@@ -1250,6 +1250,76 @@ describe('DragToSheetsApp', () => {
       expect(app.previewStats.textContent).toContain('Showing 2 of 999 rows');
     });
 
+    test('samples parsed Excel data and cellMeta with identical row and column bounds', async () => {
+      const app = await createApp();
+      const data = Array.from({ length: 60 }, (_, ri) => [
+        ri === 0 ? 'Header' : `value-${ri}`,
+        ri,
+        true,
+      ]);
+      const cellMeta = data.map((row, ri) => row.map((value, ci) => (
+        ci === 0
+          ? { type: 'string', value: String(value) }
+          : ci === 1
+            ? { type: 'number', value }
+            : { type: 'boolean', value }
+      )));
+      const item = {
+        name: 'typed.xlsx',
+        ext: 'xlsx',
+        parsed: { sheets: [{ name: 'Sheet1', data, cellMeta }] },
+        stats: { sheetCount: 1, rowCount: 60, colCount: 3 },
+        size: 1024,
+      };
+
+      const preview = await app.ensurePreviewSample(item);
+
+      expect(preview.sheets[0].data).toHaveLength(51);
+      expect(preview.sheets[0].cellMeta).toHaveLength(51);
+      expect(preview.sheets[0].data[50]).toEqual(data[50]);
+      expect(preview.sheets[0].cellMeta[50]).toEqual(cellMeta[50]);
+      expect(preview.sheets[0].data[0]).toHaveLength(3);
+      expect(preview.sheets[0].cellMeta[0]).toHaveLength(3);
+      expect(preview.previewMeta.metadataTrusted).toBe(true);
+    });
+
+    test('does not represent Fix numbers when sampled Excel metadata is unavailable', async () => {
+      const app = await createApp();
+      jest.spyOn(app, 'runProcessingTask').mockImplementation((type, payload, fallback) => fallback());
+      app.files = [{
+        name: 'untrusted.xlsx',
+        ext: 'xlsx',
+        size: 1024,
+        parsed: null,
+        file: new File(['x'], 'untrusted.xlsx'),
+      }];
+      document.getElementById('opt-numbers').checked = true;
+      Parser.preview.mockResolvedValue({
+        sheets: [{ name: 'untrusted', data: [['Value'], ['1,234']] }],
+        previewMeta: {
+          rowCount: 2,
+          colCount: 1,
+          sheetCount: 1,
+          sampled: true,
+          sampleRows: 2,
+          metadataTrusted: false,
+        },
+      });
+      Cleaner.apply.mockImplementation((data, options, cellMeta) => ({ data, cellMeta }));
+
+      const preview = await app.getResponsiveSeparatePreview(app.files[0]);
+      app.renderPreviewTable(preview.data, 'untrusted.xlsx', preview.summary, preview.notices);
+
+      expect(Cleaner.apply).toHaveBeenCalledWith(
+        expect.any(Array),
+        expect.objectContaining({ fixNumbers: false }),
+        null
+      );
+      expect(preview.notices).toContainEqual(expect.stringContaining('Fix numbers'));
+      expect(app.previewTable.textContent).toContain('Fix numbers');
+      expect(preview.data[1][0]).toBe('1,234');
+    });
+
     test('sampled separate preview applies trim and fixNumbers', async () => {
       const app = await createApp();
       jest.spyOn(app, 'runProcessingTask').mockImplementation((type, payload, fallback) => fallback());

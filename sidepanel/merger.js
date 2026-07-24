@@ -160,9 +160,18 @@ const Merger = (() => {
         const srcLen = Math.min(srcRow.length, colMapLen);
         for (let j = 0; j < srcLen; j++) {
           const targetIdx = colMap[j];
-          if (targetIdx >= 0 && newRow[targetIdx] === '') {
-            newRow[targetIdx] = srcRow[j];
-            newMetaRow[targetIdx] = (srcMetaRow ? srcMetaRow[j] : null) || { type: 'empty' };
+          if (targetIdx < 0) continue;
+
+          // Keep the data value and metadata token paired.  A formula can
+          // legitimately display as an empty string, so display data alone
+          // cannot determine whether this destination is already occupied.
+          const candidate = {
+            data: srcRow[j],
+            cellMeta: (srcMetaRow ? srcMetaRow[j] : null) || { type: 'empty' },
+          };
+          if (!isOccupiedToken(newMetaRow[targetIdx])) {
+            newRow[targetIdx] = candidate.data;
+            newMetaRow[targetIdx] = candidate.cellMeta;
           }
         }
         mergedData[writeIdx] = newRow;
@@ -176,6 +185,19 @@ const Merger = (() => {
     }
 
     return { sheets: [{ name: 'Merged', data: mergedData, cellMeta: mergedCellMeta }], sourceMap };
+  }
+
+  /**
+   * A selected source token occupies its destination even if its display
+   * value is empty (notably formulas with an empty cached result).
+   */
+  function isOccupiedToken(token) {
+    if (!token || token.type === 'empty') return false;
+    if (token.type === 'string') return String(token.value ?? '').trim().length > 0;
+    return token.type === 'formula' ||
+      token.type === 'number' ||
+      token.type === 'boolean' ||
+      token.type === 'date';
   }
 
   /**

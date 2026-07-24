@@ -284,26 +284,67 @@ const GoogleAPI = (() => {
     let currentRows = [];
     let currentStartRow = 0;
     let currentCells = 0;
-    const colCount = Math.max(...data.map((r) => r.length), 1);
+    let currentColCount = 0;
+
+    const flush = () => {
+      if (currentRows.length === 0) return;
+      blocks.push({
+        rows: currentRows,
+        startRow: currentStartRow,
+        endRow: currentStartRow + currentRows.length,
+        startColumn: 0,
+        endColumn: currentColCount,
+        cellCount: currentRows.length * currentColCount,
+      });
+      currentRows = [];
+      currentCells = 0;
+      currentColCount = 0;
+    };
 
     for (let ri = 0; ri < data.length; ri++) {
-      const row = data[ri];
+      const row = data[ri] || [];
+      const metaRow = cellMeta && cellMeta[ri];
       const rowCells = Math.max(row.length, 1);
 
-      if (currentRows.length > 0 && currentCells + rowCells > MAX_VALUE_CELLS_PER_REQUEST) {
-        blocks.push({ rows: currentRows, startRow: currentStartRow, endRow: currentStartRow + currentRows.length, colCount });
-        currentRows = [];
-        currentCells = 0;
-        currentStartRow = ri;
+      // A single very wide row needs horizontal blocks because Sheets API
+      // requests are bounded by cells, not just by the number of rows.
+      if (row.length > MAX_VALUE_CELLS_PER_REQUEST) {
+        flush();
+        for (let colStart = 0; colStart < row.length; colStart += MAX_VALUE_CELLS_PER_REQUEST) {
+          const colEnd = Math.min(colStart + MAX_VALUE_CELLS_PER_REQUEST, row.length);
+          blocks.push({
+            rows: [buildTypedRowEntry(row.slice(colStart, colEnd), metaRow && metaRow.slice(colStart, colEnd), ri)],
+            startRow: ri,
+            endRow: ri + 1,
+            startColumn: colStart,
+            endColumn: colEnd,
+            cellCount: colEnd - colStart,
+          });
+        }
+        continue;
       }
 
-      currentRows.push(buildTypedRowEntry(row, cellMeta && cellMeta[ri], ri));
+      const nextColCount = Math.max(currentColCount, rowCells);
+      const nextCellCount = (currentRows.length + 1) * nextColCount;
+      if (
+        currentRows.length > 0 &&
+        (currentCells + rowCells > MAX_VALUE_CELLS_PER_REQUEST ||
+          nextCellCount > MAX_VALUE_CELLS_PER_REQUEST)
+      ) {
+        flush();
+      }
+
+      if (currentRows.length === 0) {
+        currentStartRow = ri;
+        currentColCount = rowCells;
+      } else {
+        currentColCount = Math.max(currentColCount, rowCells);
+      }
+      currentRows.push(buildTypedRowEntry(row, metaRow, ri));
       currentCells += rowCells;
     }
 
-    if (currentRows.length > 0) {
-      blocks.push({ rows: currentRows, startRow: currentStartRow, endRow: currentStartRow + currentRows.length, colCount });
-    }
+    flush();
 
     return blocks;
   }
@@ -373,6 +414,64 @@ const GoogleAPI = (() => {
         context
       );
     }
+  }
+
+  function countUpdateCellsRequest(request) {
+    const updateCells = request?.updateCells;
+    const range = updateCells?.range;
+    if (range &&
+      Number.isInteger(range.startRowIndex) && Number.isInteger(range.endRowIndex) &&
+      Number.isInteger(range.startColumnIndex) && Number.isInteger(range.endColumnIndex)) {
+      return Math.max(range.endRowIndex - range.startRowIndex, 1) *
+        Math.max(range.endColumnIndex - range.startColumnIndex, 1);
+    }
+    return (updateCells?.rows || []).reduce(
+      (sum, row) => sum + Math.max((row?.values || []).length, 1),
+      0
+    );
+  }
+
+  /**
+   * Send typed updateCells requests in cell-bounded HTTP payloads.  A
+   * batchUpdate body may contain several small updateCells requests, but the
+   * total rectangular cell area in that body must stay within the limit.
+   */
+  async function sendTypedBatchUpdateRequests(spreadsheetId, requests, context) {
+    if (!requests || requests.length === 0) return;
+
+    let batch = [];
+    let batchCells = 0;
+
+    const flush = async () => {
+      if (batch.length === 0) return;
+      await apiRequest(
+        `${SHEETS_BASE}/${spreadsheetId}:batchUpdate`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ requests: batch }),
+        },
+        context
+      );
+      batch = [];
+      batchCells = 0;
+    };
+
+    for (const request of requests) {
+      const requestCells = countUpdateCellsRequest(request);
+      if (requestCells > MAX_VALUE_CELLS_PER_REQUEST) {
+        throw new Error('Typed updateCells request exceeds the configured cell limit.');
+      }
+      if (
+        batch.length > 0 &&
+        (batchCells + requestCells > MAX_VALUE_CELLS_PER_REQUEST || batch.length >= MAX_BATCH_REQUESTS)
+      ) {
+        await flush();
+      }
+      batch.push(request);
+      batchCells += requestCells;
+    }
+
+    await flush();
   }
 
   // ==================================================================
@@ -860,24 +959,24 @@ const GoogleAPI = (() => {
         if (!gsSheet) continue;
         const sheetId = gsSheet.properties.sheetId;
         const blocks = buildTypedUpdateRows(sheet.data, sheet.cellMeta);
-        for (const block of blocks) {
-          requests.push({
-            updateCells: {
-              rows: block.rows,
-              fields: 'userEnteredValue,userEnteredFormat',
-              range: {
-                sheetId,
-                startRowIndex: block.startRow,
-                endRowIndex: block.endRow,
-                startColumnIndex: 0,
-                endColumnIndex: block.colCount,
+          for (const block of blocks) {
+            requests.push({
+              updateCells: {
+                rows: block.rows,
+                fields: 'userEnteredValue,userEnteredFormat',
+                range: {
+                  sheetId,
+                  startRowIndex: block.startRow,
+                  endRowIndex: block.endRow,
+                  startColumnIndex: block.startColumn,
+                  endColumnIndex: block.endColumn,
+                },
               },
-            },
-          });
+            });
         }
       }
       if (requests.length > 0) {
-        await sendBatchUpdateRequests(spreadsheetId, requests, context);
+        await sendTypedBatchUpdateRequests(spreadsheetId, requests, context);
       }
     }
 
@@ -1238,5 +1337,6 @@ const GoogleAPI = (() => {
     applyFormatting,
     tokenFromCellDataFallback,
     rowComparisonKeyFallback,
+    MAX_VALUE_CELLS_PER_REQUEST,
   };
 })();

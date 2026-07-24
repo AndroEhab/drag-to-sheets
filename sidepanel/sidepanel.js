@@ -20,6 +20,9 @@
     tabYieldEvery: 5,
     tabYieldMs: 75,
   };
+  const PREVIEW_SAMPLE_ROWS = 51;
+  const EXCEL_METADATA_PREVIEW_NOTICE =
+    'Excel metadata-sensitive transformations, including Fix numbers, are not represented in this sample because trustworthy cell metadata is unavailable; they will be applied on upload.';
 
   class DragToSheetsApp {
     constructor() {
@@ -441,20 +444,37 @@
     async ensurePreviewSample(item) {
       if (item?.previewSample) return item.previewSample;
       if (item?.parsed) {
-        const data = item.parsed.sheets[0]?.data || [];
-        const rows = data.slice(0, 51).map((row) => [...row]);
+        const sourceSheet = item.parsed.sheets[0] || {};
+        const data = sourceSheet.data || [];
+        const sourceMeta = sourceSheet.cellMeta;
+        const rows = data.slice(0, PREVIEW_SAMPLE_ROWS);
+        const colCount = rows.reduce((max, row) => Math.max(max, row.length), 0);
+        const sampledRows = rows.map((row) => row.slice(0, colCount));
+        const sampledMeta = Array.isArray(sourceMeta)
+          ? sourceMeta
+            .slice(0, PREVIEW_SAMPLE_ROWS)
+            .map((row) => (Array.isArray(row) ? row.slice(0, colCount) : row))
+          : null;
+        const previewSheet = {
+          name: sourceSheet.name || item.name,
+          data: sampledRows,
+        };
+        if (Array.isArray(sourceMeta)) previewSheet.cellMeta = sampledMeta;
+        const isExcel = item.ext === 'xlsx' || item.ext === 'xls';
+        const metadataTrusted = !isExcel || (
+          Array.isArray(sampledMeta) &&
+          Parser.hasTypedCellMetadata({ sheets: [{ data: sampledRows, cellMeta: sampledMeta }] })
+        );
         const preview = {
-          sheets: [{
-            name: item.parsed.sheets[0]?.name || item.name,
-            data: rows,
-          }],
+          sheets: [previewSheet],
           previewMeta: {
             rowCount: item.stats?.rowCount || data.length,
-            colCount: item.stats?.colCount || (data[0]?.length || 0),
+            colCount: item.stats?.colCount || colCount,
             sheetCount: item.stats?.sheetCount || item.parsed.sheets.length,
-            sampled: data.length > rows.length,
-            sampleRows: rows.length,
+            sampled: data.length > sampledRows.length,
+            sampleRows: sampledRows.length,
             fileSize: this.getFileSize(item),
+            metadataTrusted,
           },
         };
         item.previewSample = preview;
@@ -480,20 +500,33 @@
       const preview = await this.ensurePreviewSample(item);
       const options = this.getCleaningOptions();
       const rawData = preview.sheets[0]?.data || [];
+      const isExcel = item.ext === 'xlsx' || item.ext === 'xls';
 
       let cellMeta = preview.sheets[0]?.cellMeta || null;
-      if (!cellMeta) {
+      if (!cellMeta && !isExcel) {
         cellMeta = rawData.map(row => row.map(v => Cleaner.tokenFromValue(v)));
       }
+
+      const metadataTrusted = !isExcel || (
+        preview.previewMeta?.metadataTrusted !== false &&
+        Array.isArray(cellMeta) &&
+        Parser.hasTypedCellMetadata({ sheets: [{ data: rawData, cellMeta }] })
+      );
 
       const structuralOps = options.removeEmptyRows || options.removeEmptyColumns || options.removeDuplicates;
       const hasNonStructural = options.trim || options.fixNumbers || options.normalizeHeaders;
 
       let cleanedData = rawData;
       const notices = [];
+      const cleaningOptions = { ...options };
+
+      if (isExcel && !metadataTrusted) {
+        notices.push(EXCEL_METADATA_PREVIEW_NOTICE);
+        cleaningOptions.fixNumbers = false;
+      }
 
       if (hasNonStructural) {
-        const sanitized = { ...options, removeEmptyRows: false, removeEmptyColumns: false, removeDuplicates: false };
+        const sanitized = { ...cleaningOptions, removeEmptyRows: false, removeEmptyColumns: false, removeDuplicates: false };
         const cleaned = Cleaner.apply(rawData, sanitized, cellMeta);
         cleanedData = Array.isArray(cleaned) ? cleaned : cleaned.data;
       }
@@ -520,14 +553,22 @@
       const sampleFiles = [];
       let totalRows = 1;
       let totalRowsKnown = true;
+      let hasUntrustedExcelMetadata = false;
 
       for (const item of this.files) {
         const preview = await this.ensurePreviewSample(item);
         const rawData = preview.sheets[0]?.data || [];
+        const isExcel = item.ext === 'xlsx' || item.ext === 'xls';
         let cellMeta = preview.sheets[0]?.cellMeta || null;
-        if (!cellMeta) {
+        if (!cellMeta && !isExcel) {
           cellMeta = rawData.map(row => row.map(v => Cleaner.tokenFromValue(v)));
         }
+        const metadataTrusted = !isExcel || (
+          preview.previewMeta?.metadataTrusted !== false &&
+          Array.isArray(cellMeta) &&
+          Parser.hasTypedCellMetadata({ sheets: [{ data: rawData, cellMeta }] })
+        );
+        if (isExcel && !metadataTrusted) hasUntrustedExcelMetadata = true;
         sampleFiles.push({
           sheets: [{
             name: preview.sheets[0]?.name || item.name,
@@ -560,9 +601,15 @@
       const structuralOps = options.removeEmptyRows || options.removeEmptyColumns || options.removeDuplicates;
       const hasNonStructural = options.trim || options.fixNumbers || options.normalizeHeaders;
       const notices = [];
+      const cleaningOptions = { ...options };
+
+      if (hasUntrustedExcelMetadata) {
+        notices.push(EXCEL_METADATA_PREVIEW_NOTICE);
+        cleaningOptions.fixNumbers = false;
+      }
 
       if (hasNonStructural && merged.sheets[0]?.data) {
-        const sanitized = { ...options, removeEmptyRows: false, removeEmptyColumns: false, removeDuplicates: false };
+        const sanitized = { ...cleaningOptions, removeEmptyRows: false, removeEmptyColumns: false, removeDuplicates: false };
         const cleaned = Cleaner.apply(merged.sheets[0].data, sanitized, merged.sheets[0].cellMeta || null);
         merged.sheets[0].data = Array.isArray(cleaned) ? cleaned : cleaned.data;
       }
