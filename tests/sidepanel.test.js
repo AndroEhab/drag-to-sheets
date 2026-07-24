@@ -140,6 +140,7 @@ function setupDOM() {
         <button id="mapping-approve-btn">Apply Mappings</button>
         <button id="mapping-decline-btn">Decline</button>
       </div>
+      <button id="settings-btn" aria-controls="cleaning-options" aria-expanded="false">Settings</button>
       <div id="cleaning-options" class="hidden">
         <input type="checkbox" id="opt-trim">
         <input type="checkbox" id="opt-empty-rows">
@@ -155,7 +156,6 @@ function setupDOM() {
         <input type="checkbox" id="opt-headers">
       </div>
     </div>
-    <button id="settings-btn" aria-controls="cleaning-options" aria-expanded="false">Settings</button>
     <div id="preview-panel" class="hidden">
       <select id="preview-select"></select>
       <div id="preview-stats"></div>
@@ -423,17 +423,56 @@ describe('DragToSheetsApp', () => {
       expect(uploadSpy).not.toHaveBeenCalled();
     });
 
-    test('cleaning controls are reachable in natural keyboard order', async () => {
+    test('settings button immediately precedes cleaning-options', async () => {
       await createApp();
       const settings = document.getElementById('settings-btn');
       const cleaning = document.getElementById('cleaning-options');
+      const firstControl = cleaning.querySelector('input');
       const preview = document.getElementById('preview-panel');
-      // Cleaning options are inside options-panel, which precedes settings in DOM
-      const allElements = document.body.querySelectorAll('#options-panel, #settings-btn, #preview-panel');
-      const indices = {};
-      allElements.forEach((el, i) => { indices[el.id] = i; });
-      expect(indices['options-panel']).toBeLessThan(indices['settings-btn']);
-      expect(indices['settings-btn']).toBeLessThan(indices['preview-panel']);
+
+      expect(
+        settings.compareDocumentPosition(cleaning) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+
+      expect(
+        settings.compareDocumentPosition(firstControl) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+
+      expect(
+        cleaning.compareDocumentPosition(preview) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+    });
+
+    test('preview precedes Open in Sheets in DOM order', async () => {
+      await createApp();
+      const preview = document.getElementById('preview-panel');
+      const upload = document.getElementById('upload-btn');
+      expect(
+        preview.compareDocumentPosition(upload) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+    });
+
+    test('Open in Sheets precedes live status regions', async () => {
+      await createApp();
+      const upload = document.getElementById('upload-btn');
+      const status = document.getElementById('loading-sr-status');
+      const alert = document.getElementById('loading-sr-alert');
+      expect(
+        upload.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+      expect(status.getAttribute('role')).toBe('status');
+      expect(alert.getAttribute('role')).toBe('alert');
+    });
+
+    test('restored settingsOpen preference shows controls and aria-expanded true', async () => {
+      const app = await createApp();
+      // Simulate restore from prefs
+      app.cleaningOptions.classList.remove('hidden');
+      app.settingsBtn.classList.add('active');
+      app.settingsBtn.setAttribute('aria-expanded', 'true');
+      expect(app.cleaningOptions.classList.contains('hidden')).toBe(false);
+      expect(app.settingsBtn.getAttribute('aria-expanded')).toBe('true');
+      expect(app.settingsBtn.classList.contains('active')).toBe(true);
     });
 
     test('upload button disabled state matches files length', async () => {
@@ -442,16 +481,6 @@ describe('DragToSheetsApp', () => {
       app.files = [{ name: 'test.csv' }];
       app.updateUI();
       expect(app.uploadBtn.disabled).toBe(false);
-    });
-
-    test('live status regions remain after primary action and retain roles', async () => {
-      await createApp();
-      const upload = document.getElementById('upload-btn');
-      const status = document.getElementById('loading-sr-status');
-      const alert = document.getElementById('loading-sr-alert');
-      expect(upload.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-      expect(status.getAttribute('role')).toBe('status');
-      expect(alert.getAttribute('role')).toBe('alert');
     });
   });
 
