@@ -491,12 +491,20 @@ const GoogleAPI = (() => {
 
       // ---- Value-level changes (trim, fix numbers, normalize headers) ----
       if (options.trim || options.fixNumbers || options.normalizeHeaders) {
+        // Compute used bounds from the initial values read so the grid-data
+        // request targets only the populated range rather than the full sheet.
+        const usedRows = data.length;
+        const usedCols = Math.max(...data.map((r) => (r ? r.length : 0)), 0);
+        if (usedRows === 0 || usedCols === 0) continue;
+
+        const a1Range = `${escapeSheetName(sheetTitle)}!A1:${colToLetter(usedCols - 1)}${usedRows}`;
+
         // Read grid data with CellData fields to positively identify cell types.
         // userEnteredValue distinguishes formulas, numbers, strings, and booleans.
         // effectiveFormat.numberFormat.type exposes DATE, TIME, TEXT, etc.
         const GRID_FIELDS = 'sheets(data(rowData(values(userEnteredValue,effectiveFormat(numberFormat)))))';
         const gridResult = await apiRequest(
-          `${SHEETS_BASE}/${spreadsheetId}?includeGridData=true&ranges=${encodeURIComponent(escapeSheetName(sheetTitle))}&fields=${encodeURIComponent(GRID_FIELDS)}`,
+          `${SHEETS_BASE}/${spreadsheetId}?fields=${encodeURIComponent(GRID_FIELDS)}&ranges=${encodeURIComponent(a1Range)}`,
           {},
           context
         );

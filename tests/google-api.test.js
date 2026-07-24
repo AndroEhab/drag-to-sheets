@@ -1528,6 +1528,225 @@ describe('GoogleAPI', () => {
         { range: "'Sheet1'!A3", values: [['text']] },
       ]);
     });
+
+    test('grid-data request uses an explicit bounded A1 range', async () => {
+      global.fetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            sheets: [{
+              properties: {
+                sheetId: 0,
+                title: 'Sheet1',
+                gridProperties: { rowCount: 1000, columnCount: 26 },
+              },
+            }],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            values: [
+              ['A', 'B', 'C'],
+              ['1', '2', '3'],
+            ],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve(gridData([
+            [cellS('A'), cellS('B'), cellS('C')],
+            [cellS('1'), cellS('2'), cellS('3')],
+          ])),
+        })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      await GoogleAPI.cleanUploadedSheet('sheet-id', {
+        removeEmptyRows: false,
+        removeEmptyColumns: false,
+        removeDuplicates: false,
+        trim: true,
+        fixNumbers: false,
+        normalizeHeaders: false,
+      });
+
+      // Call 2 is the grid-data request — inspect its URL
+      const gridUrl = global.fetch.mock.calls[2][0];
+      expect(gridUrl).toContain('spreadsheets/sheet-id');
+      expect(gridUrl).toContain('fields=');
+      expect(gridUrl).not.toContain('includeGridData');
+      // 2 rows × 3 cols → range should be 'Sheet1'!A1:C2
+      expect(gridUrl).toContain(encodeURIComponent("'Sheet1'!A1:C2"));
+    });
+
+    test('grid-data range escapes sheet name containing spaces', async () => {
+      global.fetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            sheets: [{
+              properties: {
+                sheetId: 0,
+                title: 'My Data',
+                gridProperties: { rowCount: 100, columnCount: 10 },
+              },
+            }],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            values: [['X'], ['y']],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve(gridData([
+            [cellS('X')],
+            [cellS('y')],
+          ])),
+        })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      await GoogleAPI.cleanUploadedSheet('sheet-id', {
+        removeEmptyRows: false,
+        removeEmptyColumns: false,
+        removeDuplicates: false,
+        trim: true,
+        fixNumbers: false,
+        normalizeHeaders: false,
+      });
+
+      const gridUrl = global.fetch.mock.calls[2][0];
+      // Sheet name with spaces: 'My Data'!A1:A2
+      expect(gridUrl).toContain(encodeURIComponent("'My Data'!A1:A2"));
+    });
+
+    test('grid-data range escapes sheet name containing an apostrophe', async () => {
+      global.fetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            sheets: [{
+              properties: {
+                sheetId: 0,
+                title: "John's Sheet",
+                gridProperties: { rowCount: 50, columnCount: 5 },
+              },
+            }],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            values: [['Data'], ['1']],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve(gridData([
+            [cellS('Data')],
+            [cellS('1')],
+          ])),
+        })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      await GoogleAPI.cleanUploadedSheet('sheet-id', {
+        removeEmptyRows: false,
+        removeEmptyColumns: false,
+        removeDuplicates: false,
+        trim: true,
+        fixNumbers: false,
+        normalizeHeaders: false,
+      });
+
+      const gridUrl = global.fetch.mock.calls[2][0];
+      // escapeSheetName wraps in single quotes and doubles internal apostrophes
+      const expectedA1 = "'John''s Sheet'!A1:A2";
+      expect(gridUrl).toContain(encodeURIComponent(expectedA1));
+    });
+
+    test('grid-data range uses max column count from uneven row lengths', async () => {
+      global.fetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            sheets: [{
+              properties: {
+                sheetId: 0,
+                title: 'Ragged',
+                gridProperties: { rowCount: 10, columnCount: 10 },
+              },
+            }],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          // Row 0 has 2 cols, row 1 has 5, row 2 has 3 — max is 5
+          json: () => Promise.resolve({
+            values: [
+              ['A', 'B'],
+              ['1', '2', '3', '4', '5'],
+              ['x', 'y', 'z'],
+            ],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve(gridData([
+            [cellS('A'), cellS('B')],
+            [cellS('1'), cellS('2'), cellS('3'), cellS('4'), cellS('5')],
+            [cellS('x'), cellS('y'), cellS('z')],
+          ])),
+        })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      await GoogleAPI.cleanUploadedSheet('sheet-id', {
+        removeEmptyRows: false,
+        removeEmptyColumns: false,
+        removeDuplicates: false,
+        trim: true,
+        fixNumbers: false,
+        normalizeHeaders: false,
+      });
+
+      const gridUrl = global.fetch.mock.calls[2][0];
+      // 3 rows × max 5 cols → 'Ragged'!A1:E3
+      expect(gridUrl).toContain(encodeURIComponent("'Ragged'!A1:E3"));
+    });
+
+    test('effectively empty sheet does not issue a grid-data request', async () => {
+      global.fetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            sheets: [{
+              properties: {
+                sheetId: 0,
+                title: 'Empty',
+                gridProperties: { rowCount: 100, columnCount: 10 },
+              },
+            }],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ values: [] }),
+        });
+      // No grid-data mock needed — request should not be issued
+
+      await GoogleAPI.cleanUploadedSheet('sheet-id', {
+        removeEmptyRows: false,
+        removeEmptyColumns: false,
+        removeDuplicates: false,
+        trim: true,
+        fixNumbers: true,
+        normalizeHeaders: true,
+      });
+
+      // Only 2 calls: getSpreadsheetInfo + FORMATTED_VALUE read, then skip
+      expect(global.fetch.mock.calls.length).toBe(2);
+    });
   });
 
   // ================================================================
