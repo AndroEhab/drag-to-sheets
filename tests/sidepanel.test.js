@@ -545,7 +545,7 @@ describe('DragToSheetsApp', () => {
       expect(app.files[0].stats).toBeUndefined();
     });
 
-    test('truncated sampled rows are not assigned to item.stats', async () => {
+    test('truncated sampled rows are not assigned to item.stats or item.summaryStats', async () => {
       const app = await createApp();
       global.Parser.preview.mockResolvedValue({
         sheets: [{ name: 'Sheet1', data: [['h'], ['v1']] }],
@@ -554,6 +554,7 @@ describe('DragToSheetsApp', () => {
       app.files = [{ name: 't.csv', parsed: null, lazy: true, file: new File(['h\nv1'], 't.csv', { type: 'text/csv' }) }];
       await app.ensurePreviewSample(app.files[0]);
       expect(app.files[0].stats).toBeUndefined();
+      expect(app.files[0].summaryStats).toBeUndefined();
     });
 
     test('multi-sheet Excel preview reports totals across all sheets', async () => {
@@ -649,6 +650,61 @@ describe('DragToSheetsApp', () => {
       expect(document.getElementById('summary-files').textContent).toBe('1');
       expect(document.getElementById('summary-rows').textContent).toBe('3');
       expect(document.getElementById('summary-cols').textContent).toBe('1');
+    });
+  });
+
+  // ---- summaryStats vs stats separation ----
+
+  describe('summaryStats isolation', () => {
+    test('preview hydration sets summaryStats not stats', async () => {
+      const app = await createApp();
+      global.Parser.preview.mockResolvedValue({
+        sheets: [{ name: 'Sheet1', data: [['h'], ['v1'], ['v2']] }],
+        previewMeta: { rowCount: 3, dataRowCount: 2, colCount: 1, sheetCount: 1, sampled: false, sampleRows: 3, fileSize: 20 },
+      });
+      app.files = [{ name: 'a.csv', parsed: null, lazy: true, file: new File(['h\nv1\nv2'], 'a.csv', { type: 'text/csv' }) }];
+      await app.ensurePreviewSample(app.files[0]);
+      expect(app.files[0].summaryStats).toBeDefined();
+      expect(app.files[0].summaryStats.dataRowCount).toBe(2);
+      expect(app.files[0].stats).toBeUndefined();
+    });
+
+    test('full parse replaces summaryStats with complete stats', async () => {
+      const app = await createApp();
+      global.Parser.parse.mockResolvedValue({
+        sheets: [{ name: 'Sheet1', data: [['h'], ['v1'], ['v2'], ['v3']] }],
+      });
+      app.files = [{ name: 'a.csv', parsed: null, lazy: true, summaryStats: { sheetCount: 1, rowCount: 3, dataRowCount: 2, colCount: 1 }, file: new File(['h\nv1\nv2'], 'a.csv', { type: 'text/csv' }) }];
+      await app.ensureParsedEntry(app.files[0]);
+      expect(app.files[0].stats).toBeDefined();
+      expect(app.files[0].stats.dataRowCount).toBe(3);
+      expect(app.files[0].summaryStats).toBeUndefined();
+      expect(document.getElementById('summary-rows').textContent).toBe('3');
+    });
+
+    test('getLoadedWorkloadHints is unchanged by summary-only hydration', async () => {
+      const app = await createApp();
+      // file with full stats (as from computeParsedStats)
+      const fullFile = { name: 'full.csv', parsed: { sheets: [{ name: 'S1', data: [['h'], ['v']] }] }, stats: { rowCount: 2, dataRowCount: 1, colCount: 1, cellCount: 2, styledCellCount: 0 } };
+      // file with only summaryStats (from preview)
+      const summaryFile = { name: 'sum.csv', parsed: null, lazy: true, summaryStats: { sheetCount: 1, rowCount: 5, dataRowCount: 4, colCount: 3 } };
+      app.files = [fullFile, summaryFile];
+
+      const hints = app.getLoadedWorkloadHints();
+      expect(hints.fileCount).toBe(2);
+      expect(hints.totalCells).toBe(2); // only fullFile contributes
+      expect(hints.maxFileCells).toBe(2);
+      expect(hints.totalBytes).toBe(0);
+    });
+
+    test('summaryStats alone renders cards without polluting workload stats', async () => {
+      const app = await createApp();
+      app.files = [{ name: 'p.csv', parsed: null, summaryStats: { sheetCount: 2, rowCount: 10, dataRowCount: 8, colCount: 5 } }];
+      app._updateSummaryCards();
+      expect(document.getElementById('summary-rows').textContent).toBe('8');
+      expect(document.getElementById('summary-cols').textContent).toBe('5');
+      // getEntryStats should return null since there's no full stats
+      expect(app.getEntryStats(app.files[0])).toBeNull();
     });
   });
 

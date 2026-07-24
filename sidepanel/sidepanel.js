@@ -405,6 +405,7 @@
 
       item.parsed = parsed;
       item.stats = this.computeParsedStats(parsed);
+      delete item.summaryStats;
       item.lazy = false;
       item.contentFingerprint = this.computeFingerprint(parsed);
       this.fileFingerprints.add(item.contentFingerprint);
@@ -445,14 +446,7 @@
         return null;
       }
 
-      return {
-        sheetCount,
-        rowCount,
-        dataRowCount,
-        colCount,
-        cellCount: rowCount * colCount,
-        styledCellCount: 0,
-      };
+      return { sheetCount, rowCount, dataRowCount, colCount };
     }
 
     async ensurePreviewSample(item) {
@@ -505,9 +499,9 @@
         () => Parser.preview(item.file, { sampleRows: 51 })
       );
       item.previewSample = preview;
-      const exactStats = this.buildStatsFromPreview(preview);
-      if (exactStats) {
-        item.stats = exactStats;
+      const exactSummary = this.buildStatsFromPreview(preview);
+      if (exactSummary) {
+        item.summaryStats = exactSummary;
       }
       this._updateSummaryCards();
       return preview;
@@ -1291,6 +1285,7 @@
         ext: item.ext,
         size: this.getFileSize(item),
         stats: item.stats || null,
+        summaryStats: item.summaryStats || null,
         identityKey: item.identityKey || null,
         contentFingerprint: item.contentFingerprint || null,
         lazy: Boolean(item.lazy && !item.parsed),
@@ -1304,6 +1299,7 @@
         ext: item.ext,
         size: this.getFileSize(item),
         stats: item.stats || null,
+        summaryStats: item.summaryStats || null,
         identityKey: item.identityKey || null,
         contentFingerprint: item.contentFingerprint || null,
         lazy: Boolean(item.lazy && !item.parsed),
@@ -1396,6 +1392,7 @@
             ext: item.ext,
             size: item.size || 0,
             stats: item.stats || null,
+            summaryStats: item.summaryStats || null,
             identityKey: item.identityKey || `${item.name}::${item.ext}::${item.size || 0}::0`,
             contentFingerprint: item.contentFingerprint || null,
             lazy: Boolean(item.lazy && !item.sheets),
@@ -1961,26 +1958,27 @@
       let hasAllStats = true;
 
       for (const file of this.files) {
-        const stats = file.stats || (file.parsed ? this.getEntryStats(file) : null);
-        if (!stats) {
+        const summary = file.stats || file.summaryStats;
+        if (!summary) {
           hasAllStats = false;
           continue;
         }
-        // dataRowCount from extended stats; derive from parsed sheets for legacy data
-        let dataRows = stats.dataRowCount;
+        // dataRowCount from full-parse stats or preview summary;
+        // derive from parsed sheets for legacy stored stats without dataRowCount
+        let dataRows = summary.dataRowCount;
         if (dataRows === undefined && file.parsed?.sheets) {
           dataRows = 0;
           for (const sheet of file.parsed.sheets) {
             dataRows += Math.max((sheet.data?.length || 0) - 1, 0);
           }
-          stats.dataRowCount = dataRows;
+          summary.dataRowCount = dataRows;
         }
         if (dataRows === undefined) {
           hasAllStats = false;
           continue;
         }
         totalRows += dataRows;
-        maxCols = Math.max(maxCols, stats.colCount);
+        maxCols = Math.max(maxCols, summary.colCount);
       }
 
       document.getElementById('summary-rows').textContent = hasAllStats ? totalRows.toLocaleString() : '\u2014';
