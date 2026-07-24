@@ -151,7 +151,8 @@ const Cleaner = (() => {
 
   /**
    * Convert text-formatted numbers to actual numbers.
-   * Skips the header row. Only converts clean numeric strings.
+   * Skips the header row. Converts all eligible numeric-looking strings.
+   * Preserves leading-zero identifiers (postal codes, SKUs, etc.).
    */
   function fixNumberFormatting(data) {
     if (data.length <= 1) return data;
@@ -164,7 +165,7 @@ const Cleaner = (() => {
         if (trimmed === '') return cell;
 
         const cleaned = trimmed.replace(/[,\s]/g, '');
-        if (/^-?\d+(\.\d+)?$/.test(cleaned) && cleaned !== trimmed) {
+        if (/^-?\d+(\.\d+)?$/.test(cleaned)) {
           if (cleaned.length > 1 && cleaned.startsWith('0') && !cleaned.startsWith('0.')) {
             return cleaned; // Leading-zero identifier — keep as string
           }
@@ -218,6 +219,76 @@ const Cleaner = (() => {
     };
   }
 
+  // ================================================================
+  //  Cell-token helpers — shared by local preview and Google-side
+  //  structural planning to guarantee identical row-identity and
+  //  emptiness semantics.
+  // ================================================================
+
+  /**
+   * Build a cell token from a raw 2D-array value (used by the local
+   * Cleaner path for structural comparison).
+   */
+  function tokenFromValue(value) {
+    if (value === null || value === undefined || value === '') return { type: 'empty' };
+    if (typeof value === 'number') return { type: 'number', value };
+    if (typeof value === 'boolean') return { type: 'boolean', value };
+    if (typeof value === 'string') return { type: 'string', value };
+    return { type: 'string', value: String(value) };
+  }
+
+  /**
+   * Build a cell token from a Sheets API CellData object (used by
+   * the Google-side structural-planning path).
+   */
+  function tokenFromCellData(cellData) {
+    const uev = (cellData && cellData.userEnteredValue) || {};
+    const fmtType = cellData && cellData.effectiveFormat && cellData.effectiveFormat.numberFormat
+      ? cellData.effectiveFormat.numberFormat.type
+      : undefined;
+
+    if (uev.formulaValue !== undefined) return { type: 'formula', value: uev.formulaValue };
+    if (fmtType === 'DATE' || fmtType === 'TIME' || fmtType === 'DATE_TIME') return { type: 'date', value: uev.numberValue };
+    if (uev.boolValue !== undefined) return { type: 'boolean', value: uev.boolValue };
+    if (uev.numberValue !== undefined) return { type: 'number', value: uev.numberValue };
+    if (uev.stringValue !== undefined && uev.stringValue !== '') return { type: 'string', value: uev.stringValue };
+    return { type: 'empty' };
+  }
+
+  /**
+   * Returns true when a token represents an effectively empty cell.
+   * Whitespace-only strings are treated as empty.
+   */
+  function isTokenEmpty(token) {
+    if (!token || token.type === 'empty') return true;
+    if (token.type === 'string' && String(token.value || '').trim().length === 0) return true;
+    return false;
+  }
+
+  /**
+   * Stable comparison key for a single cell token.
+   * When `shouldTrim` is true, string values are trimmed before keying.
+   */
+  function tokenComparisonKey(token, shouldTrim) {
+    if (token.type === 'string' && shouldTrim) {
+      return `string\x00${String(token.value ?? '').trim()}`;
+    }
+    return `${token.type}\x00${token.value ?? ''}`;
+  }
+
+  /**
+   * Build a row-level comparison key from an array of cell tokens.
+   * Columns in `excludedCols` are skipped (for empty-column handling).
+   */
+  function rowComparisonKey(tokens, shouldTrim, excludedCols) {
+    const excluded = new Set(excludedCols || []);
+    return tokens.reduce((parts, token, idx) => {
+      if (excluded.has(idx)) return parts;
+      parts.push(tokenComparisonKey(token, shouldTrim));
+      return parts;
+    }, []).join('\x01');
+  }
+
   return {
     apply,
     trimWhitespace,
@@ -228,5 +299,11 @@ const Cleaner = (() => {
     fixNumberFormatting,
     normalizeHeaders,
     getStats,
+    // Cell-token helpers
+    tokenFromValue,
+    tokenFromCellData,
+    isTokenEmpty,
+    tokenComparisonKey,
+    rowComparisonKey,
   };
 })();

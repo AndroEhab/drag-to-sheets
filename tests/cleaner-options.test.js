@@ -491,19 +491,18 @@ describe('Cleaning Option: Fix Number Formatting', () => {
   test('converts simple integer strings to numbers', () => {
     const data = [['Value'], ['42'], ['0'], ['-7']];
     const result = Cleaner.apply(data, opts);
-    // Plain numeric strings without formatting characters stay as strings
-    expect(result[1][0]).toBe('42');
-    expect(result[2][0]).toBe('0');
-    expect(result[3][0]).toBe('-7');
+    // All numeric-looking strings become numbers
+    expect(result[1][0]).toBe(42);
+    expect(result[2][0]).toBe(0);
+    expect(result[3][0]).toBe(-7);
   });
 
   test('converts decimal strings to numbers', () => {
     const data = [['Value'], ['3.14'], ['-0.5'], ['0.001']];
     const result = Cleaner.apply(data, opts);
-    // Plain numeric strings without formatting characters stay as strings
-    expect(result[1][0]).toBe('3.14');
-    expect(result[2][0]).toBe('-0.5');
-    expect(result[3][0]).toBe('0.001');
+    expect(result[1][0]).toBe(3.14);
+    expect(result[2][0]).toBe(-0.5);
+    expect(result[3][0]).toBe(0.001);
   });
 
   test('converts comma-separated thousands', () => {
@@ -518,8 +517,7 @@ describe('Cleaning Option: Fix Number Formatting', () => {
     const data = [['123', '456', '78.9'], ['1', '2', '3']];
     const result = Cleaner.apply(data, opts);
     expect(result[0]).toEqual(['123', '456', '78.9']); // unchanged strings
-    // Plain numeric strings without formatting characters stay as strings
-    expect(result[1]).toEqual(['1', '2', '3']);
+    expect(result[1]).toEqual([1, 2, 3]); // converted
   });
 
   test('leaves non-numeric text unchanged', () => {
@@ -553,10 +551,9 @@ describe('Cleaning Option: Fix Number Formatting', () => {
   test('handles numbers with leading/trailing whitespace', () => {
     const data = [['Col'], [' 42 '], [' -3.14 ']];
     const result = Cleaner.apply(data, opts);
-    // Without trim, whitespace is not the job of fixNumbers;
-    // the internal trim() on each cell sees no formatting to remove
-    expect(result[1][0]).toBe(' 42 ');
-    expect(result[2][0]).toBe(' -3.14 ');
+    // fixNumbers internally trims before checking, then converts
+    expect(result[1][0]).toBe(42);
+    expect(result[2][0]).toBe(-3.14);
   });
 
   test('handles cells that are already numbers', () => {
@@ -569,17 +566,17 @@ describe('Cleaning Option: Fix Number Formatting', () => {
   test('converts zero correctly', () => {
     const data = [['Col'], ['0'], ['0.0'], ['-0']];
     const result = Cleaner.apply(data, opts);
-    // Plain numeric strings without formatting stay as strings
-    expect(result[1][0]).toBe('0');
-    expect(result[2][0]).toBe('0.0');
-    expect(result[3][0]).toBe('-0');
+    // Numeric-looking strings become numbers
+    expect(result[1][0]).toBe(0);
+    expect(result[2][0]).toBe(0);
+    expect(result[3][0]).toBe(-0);
   });
 
   test('handles large numbers', () => {
     const data = [['Col'], ['999999999999'], ['1,000,000,000']];
     const result = Cleaner.apply(data, opts);
-    // Plain string stays as string; formatted string with commas becomes number
-    expect(result[1][0]).toBe('999999999999');
+    // All numeric-looking strings become numbers
+    expect(result[1][0]).toBe(999999999999);
     expect(result[2][0]).toBe(1000000000);
   });
 
@@ -722,8 +719,7 @@ describe('Combined Cleaning Options', () => {
       normalizeHeaders: true,
     });
     expect(result[0]).toEqual(['Price', 'Quantity']);
-    // 1,000 has commas → converted; 5 is plain → stays string
-    expect(result[1]).toEqual([1000, '5']);
+    expect(result[1]).toEqual([1000, 5]);
   });
 
   test('all options enabled on realistic data', () => {
@@ -744,11 +740,10 @@ describe('Combined Cleaning Options', () => {
       normalizeHeaders: true,
     });
     // Trim first → then empty rows → then empty cols → then dedup → then fix nums → then normalize headers
-    // Plain numeric strings stay as strings; comma-formatted become numbers
     expect(result).toEqual([
       ['First Name', 'Age', 'Score'],
-      ['Alice', '30', 1500],
-      ['Bob', '25', 2000],
+      ['Alice', 30, 1500],
+      ['Bob', 25, 2000],
     ]);
   });
 

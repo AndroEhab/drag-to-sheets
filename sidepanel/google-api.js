@@ -361,44 +361,69 @@ const GoogleAPI = (() => {
    * Uses Sheets API deleteDimension (which preserves cell formatting of
    * remaining rows/columns) and value updates for cell-level cleaning.
    */
-  async function cleanUploadedSheet(spreadsheetId, options, context) {
+    async function cleanUploadedSheet(spreadsheetId, options, context) {
     // Get sheet metadata
     const info = await getSpreadsheetInfo(spreadsheetId, context);
+
+    const hasStructural = options.removeEmptyRows || options.removeEmptyColumns || options.removeDuplicates;
+    const hasValueLevel = options.trim || options.fixNumbers || options.normalizeHeaders;
 
     for (const gs of info.sheets) {
       const sheetId = gs.properties.sheetId;
       const sheetTitle = gs.properties.title;
+      const escapedTitle = escapeSheetName(sheetTitle);
 
-      // Read current values
-      const range = encodeURIComponent(escapeSheetName(sheetTitle));
-      const result = await apiRequest(
-        `${SHEETS_BASE}/${spreadsheetId}/values/${range}?valueRenderOption=FORMATTED_VALUE`,
+      // Read bounded CellData once for both structural planning and
+      // value-level cleaning.  Compute the used range from the sheet's
+      // grid-properties metadata to avoid a preliminary values.get call.
+      const gridRows = gs.properties.gridProperties?.rowCount || 1;
+      const gridCols = gs.properties.gridProperties?.columnCount || 1;
+      // Use the metadata to bound the CellData request.  The sheet may
+      // have empty trailing rows/columns but this is still a fraction of
+      // a full-sheet request.
+      const boundA1 = `${escapedTitle}!A1:${colToLetter(gridCols - 1)}${gridRows}`;
+
+      const GRID_FIELDS = 'sheets(data(rowData(values(userEnteredValue,effectiveFormat(numberFormat)))))';
+      const gridResult = await apiRequest(
+        `${SHEETS_BASE}/${spreadsheetId}?fields=${encodeURIComponent(GRID_FIELDS)}&ranges=${encodeURIComponent(boundA1)}`,
         {},
         context
       );
-      const data = result.values || [];
-      if (data.length === 0) continue;
+      const rowData = gridResult.sheets?.[0]?.data?.[0]?.rowData || [];
+
+      if (!hasStructural && !hasValueLevel) continue;
+      if (rowData.length === 0) continue;
+
+      // ---- Build cell tokens for structural planning ----
+      const tokenGrid = rowData.map((row, ri) => {
+        const cells = (row && row.values) || [];
+        return cells.map((cell) =>
+          typeof Cleaner !== 'undefined' && Cleaner.tokenFromCellData
+            ? Cleaner.tokenFromCellData(cell || {})
+            : tokenFromCellDataFallback(cell || {})
+        );
+      });
 
       // ---- Structural changes (row/column deletions) ----
       const deleteRequests = [];
       const rowsToDelete = new Set();
+      const shouldTrimForComparison = Boolean(options.trim);
 
       // Empty rows (skip header row 0)
       if (options.removeEmptyRows) {
-        for (let r = data.length - 1; r >= 1; r--) {
-          if (!data[r] || data[r].every((c) => !c || !String(c).trim())) {
+        for (let r = tokenGrid.length - 1; r >= 1; r--) {
+          if (tokenGrid[r].every((t) => isTokenEmptyLocal(t))) {
             rowsToDelete.add(r);
           }
         }
       }
 
-      // Empty columns (right-to-left) — detect before duplicates so keys exclude
-      // empty columns, matching Cleaner's canonical order.
+      // Empty columns (right-to-left) — detect before duplicates
       const colsToDelete = new Set();
       if (options.removeEmptyColumns) {
-        const maxCols = Math.max(...data.map((r) => (r ? r.length : 0)), 0);
+        const maxCols = Math.max(...tokenGrid.map((r) => r.length), 0);
         for (let c = maxCols - 1; c >= 0; c--) {
-          if (data.every((row) => !row || !row[c] || !String(row[c]).trim())) {
+          if (tokenGrid.every((row) => isTokenEmptyLocal(row[c]))) {
             colsToDelete.add(c);
           }
         }
@@ -407,14 +432,11 @@ const GoogleAPI = (() => {
       // Duplicate rows (skip header row 0)
       if (options.removeDuplicates) {
         const seen = new Map();
-        for (let r = 1; r < data.length; r++) {
+        for (let r = 1; r < tokenGrid.length; r++) {
           if (rowsToDelete.has(r)) continue;
-          // Exclude columns marked for deletion from the dedup key
-          const key = (data[r] || []).reduce((parts, cell, idx) => {
-            if (colsToDelete.has(idx)) return parts;
-            parts.push(String(cell ?? '').trim());
-            return parts;
-          }, []).join('\0');
+          const key = (typeof Cleaner !== 'undefined' && Cleaner.rowComparisonKey)
+            ? Cleaner.rowComparisonKey(tokenGrid[r], shouldTrimForComparison, [...colsToDelete])
+            : rowComparisonKeyFallback(tokenGrid[r], shouldTrimForComparison, [...colsToDelete]);
           if (!seen.has(key)) seen.set(key, []);
           seen.get(key).push(r);
         }
@@ -430,7 +452,7 @@ const GoogleAPI = (() => {
         }
       }
 
-      // Delete rows bottom-to-top to avoid index shifts
+      // Delete rows bottom-to-top
       const sortedRows = [...rowsToDelete].sort((a, b) => b - a);
       for (const row of sortedRows) {
         deleteRequests.push({
@@ -440,7 +462,7 @@ const GoogleAPI = (() => {
         });
       }
 
-      // Empty columns (right-to-left using pre-computed set)
+      // Delete columns right-to-left using pre-computed set
       if (options.removeEmptyColumns) {
         const sortedCols = [...colsToDelete].sort((a, b) => b - a);
         for (const c of sortedCols) {
@@ -455,27 +477,25 @@ const GoogleAPI = (() => {
       // Send structural deletes
       if (deleteRequests.length > 0) {
         await sendBatchUpdateRequests(spreadsheetId, deleteRequests, context);
-
         if (context?.responseCache) {
           context.responseCache.delete(`spreadsheet:${spreadsheetId}`);
         }
       }
 
+      // Grid resize
       if (options.removeEmptyRows || options.removeEmptyColumns) {
-        const originalRows = gs.properties.gridProperties?.rowCount || Math.max(data.length, 1);
-        const originalCols = gs.properties.gridProperties?.columnCount || 26;
+        const originalRows = gs.properties.gridProperties?.rowCount || gridRows;
+        const originalCols = gs.properties.gridProperties?.columnCount || gridCols;
         const targetRows = options.removeEmptyRows
-          ? Math.max(1, data.length - rowsToDelete.size)
+          ? Math.max(1, tokenGrid.length - rowsToDelete.size)
           : originalRows;
 
         let targetCols = originalCols;
         if (options.removeEmptyColumns) {
-          const maxCols = Math.max(...data.map((r) => (r ? r.length : 0)), 0);
+          const maxCols = Math.max(...tokenGrid.map((r) => r.length), 0);
           targetCols = 0;
           for (let c = 0; c < maxCols; c++) {
-            if (data.some((row) => row && row[c] && String(row[c]).trim())) {
-              targetCols++;
-            }
+            if (!colsToDelete.has(c)) targetCols++;
           }
           targetCols = Math.max(targetCols, 1);
         }
@@ -487,17 +507,13 @@ const GoogleAPI = (() => {
               updateSheetProperties: {
                 properties: {
                   sheetId,
-                  gridProperties: {
-                    rowCount: targetRows,
-                    columnCount: targetCols,
-                  },
+                  gridProperties: { rowCount: targetRows, columnCount: targetCols },
                 },
                 fields: 'gridProperties.rowCount,gridProperties.columnCount',
               },
             }],
             context
           );
-
           if (context?.responseCache) {
             context.responseCache.delete(`spreadsheet:${spreadsheetId}`);
           }
@@ -505,25 +521,7 @@ const GoogleAPI = (() => {
       }
 
       // ---- Value-level changes (trim, fix numbers, normalize headers) ----
-      if (options.trim || options.fixNumbers || options.normalizeHeaders) {
-        // Compute used bounds from the initial values read so the grid-data
-        // request targets only the populated range rather than the full sheet.
-        const usedRows = data.length;
-        const usedCols = Math.max(...data.map((r) => (r ? r.length : 0)), 0);
-        if (usedRows === 0 || usedCols === 0) continue;
-
-        const a1Range = `${escapeSheetName(sheetTitle)}!A1:${colToLetter(usedCols - 1)}${usedRows}`;
-
-        // Read grid data with CellData fields to positively identify cell types.
-        // userEnteredValue distinguishes formulas, numbers, strings, and booleans.
-        // effectiveFormat.numberFormat.type exposes DATE, TIME, TEXT, etc.
-        const GRID_FIELDS = 'sheets(data(rowData(values(userEnteredValue,effectiveFormat(numberFormat)))))';
-        const gridResult = await apiRequest(
-          `${SHEETS_BASE}/${spreadsheetId}?fields=${encodeURIComponent(GRID_FIELDS)}&ranges=${encodeURIComponent(a1Range)}`,
-          {},
-          context
-        );
-        const rowData = gridResult.sheets?.[0]?.data?.[0]?.rowData || [];
+      if (hasValueLevel) {
         const stringUpdates = [];
         const numberUpdates = [];
 
@@ -534,32 +532,21 @@ const GoogleAPI = (() => {
             const uev = cell.userEnteredValue || {};
             const fmtType = cell.effectiveFormat?.numberFormat?.type;
 
-            // Skip empty cells — no userEnteredValue at all
             if (Object.keys(uev).length === 0) continue;
-
-            // Positively identified formula — never touch
             if (uev.formulaValue !== undefined) continue;
-
-            // Typed date/time values — leave unchanged
             if (fmtType === 'DATE' || fmtType === 'TIME' || fmtType === 'DATE_TIME') continue;
-
-            // Booleans — leave unchanged
             if (uev.boolValue !== undefined) continue;
-
-            // Existing numeric values — leave unchanged
             if (uev.numberValue !== undefined) continue;
 
-            // Must be a string value
             const raw = uev.stringValue;
             if (raw === undefined || raw === '') continue;
 
-            const cellRef = `${escapeSheetName(sheetTitle)}!${colToLetter(c)}${r + 1}`;
+            const cellRef = `${escapedTitle}!${colToLetter(c)}${r + 1}`;
             let cur = raw;
             let changed = false;
             let valueIsNumber = false;
             const isTextFormatted = fmtType === 'TEXT';
 
-            // Header normalization — only row 0
             if (options.normalizeHeaders && r === 0) {
               const normalized = normalizeHeaderTitleCase(cur);
               if (normalized !== cur && normalized.length > 0) {
@@ -568,7 +555,6 @@ const GoogleAPI = (() => {
               }
             }
 
-            // Trim
             if (options.trim) {
               const trimmed = cur.trim();
               if (trimmed !== cur) {
@@ -577,17 +563,18 @@ const GoogleAPI = (() => {
               }
             }
 
-            // Fix numbers — data rows only, skip TEXT-formatted cells
             if (options.fixNumbers && r > 0 && !isTextFormatted) {
               const cleaned = cur.replace(/[,\s]/g, '');
-              if (/^-?\d+(\.\d+)?$/.test(cleaned) && cleaned !== cur) {
-                changed = true;
-                if (cleaned.length > 1 && cleaned.startsWith('0') && !cleaned.startsWith('0.')) {
-                  cur = cleaned;
-                  valueIsNumber = false;
-                } else {
-                  cur = parseFloat(cleaned);
-                  valueIsNumber = true;
+              if (/^-?\d+(\.\d+)?$/.test(cleaned)) {
+                if (cleaned !== cur) {
+                  changed = true;
+                  if (cleaned.length > 1 && cleaned.startsWith('0') && !cleaned.startsWith('0.')) {
+                    cur = cleaned;
+                    valueIsNumber = false;
+                  } else {
+                    cur = parseFloat(cleaned);
+                    valueIsNumber = true;
+                  }
                 }
               }
             }
@@ -610,6 +597,33 @@ const GoogleAPI = (() => {
         }
       }
     }
+  }
+
+  // Fallback helpers used when Cleaner module is not loaded (tests / edge cases).
+  function isTokenEmptyLocal(t) {
+    if (!t || t.type === 'empty') return true;
+    if (t.type === 'string' && String(t.value || '').trim().length === 0) return true;
+    return false;
+  }
+  function tokenFromCellDataFallback(cellData) {
+    const uev = (cellData && cellData.userEnteredValue) || {};
+    const fmtType = cellData && cellData.effectiveFormat && cellData.effectiveFormat.numberFormat
+      ? cellData.effectiveFormat.numberFormat.type : undefined;
+    if (uev.formulaValue !== undefined) return { type: 'formula', value: uev.formulaValue };
+    if (fmtType === 'DATE' || fmtType === 'TIME' || fmtType === 'DATE_TIME') return { type: 'date', value: uev.numberValue };
+    if (uev.boolValue !== undefined) return { type: 'boolean', value: uev.boolValue };
+    if (uev.numberValue !== undefined) return { type: 'number', value: uev.numberValue };
+    if (uev.stringValue !== undefined && uev.stringValue !== '') return { type: 'string', value: uev.stringValue };
+    return { type: 'empty' };
+  }
+  function rowComparisonKeyFallback(tokens, shouldTrim, excludedCols) {
+    const excluded = new Set(excludedCols || []);
+    return tokens.reduce((parts, t, idx) => {
+      if (excluded.has(idx)) return parts;
+      const val = (t.type === 'string' && shouldTrim) ? String(t.value || '').trim() : t.value;
+      parts.push(`${t.type}\x00${val ?? ''}`);
+      return parts;
+    }, []).join('\x01');
   }
 
   /**
