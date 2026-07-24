@@ -117,8 +117,16 @@ function setupDOM() {
     <span id="file-count"></span>
     <div id="options-panel">
       <div id="merge-option" class="hidden">
-        <input type="radio" name="open-mode" value="separate" checked>
-        <input type="radio" name="open-mode" value="merge">
+        <div class="open-mode-options">
+          <label class="open-mode-card open-mode-card--selected" id="open-mode-separate-card">
+            <input type="radio" name="open-mode" value="separate" checked>
+            <span class="open-mode-card-label">Open separately</span>
+          </label>
+          <label class="open-mode-card" id="open-mode-merge-card">
+            <input type="radio" name="open-mode" value="merge">
+            <span class="open-mode-card-label">Merge into one</span>
+          </label>
+        </div>
         <div id="smart-mapping-option" class="hidden">
           <input type="checkbox" id="opt-smart-mapping">
         </div>
@@ -1054,6 +1062,40 @@ describe('DragToSheetsApp', () => {
       document.querySelector('input[name="open-mode"][value="merge"]').checked = true;
 
       expect(app.getOpenMode()).toBe('merge');
+    });
+  });
+
+  // ---- open-mode card interaction ----
+
+  describe('open-mode card interaction', () => {
+    test('clicking the merge card triggers one mode-change flow', async () => {
+      const app = await createApp();
+      app.mergeOption.classList.remove('hidden');
+
+      const refreshSpy = jest.spyOn(app, 'schedulePreviewRefresh');
+      const saveSpy = jest.spyOn(app, 'savePreferences');
+
+      document.getElementById('open-mode-merge-card').click();
+
+      expect(refreshSpy).toHaveBeenCalledTimes(1);
+      expect(saveSpy).toHaveBeenCalledTimes(1);
+      expect(app.getOpenMode()).toBe('merge');
+    });
+
+    test('clicking the separate card triggers one mode-change flow', async () => {
+      const app = await createApp();
+      app.mergeOption.classList.remove('hidden');
+      document.querySelector('input[name="open-mode"][value="merge"]').checked = true;
+      app._updateOpenModeCards();
+
+      const refreshSpy = jest.spyOn(app, 'schedulePreviewRefresh');
+      const saveSpy = jest.spyOn(app, 'savePreferences');
+
+      document.getElementById('open-mode-separate-card').click();
+
+      expect(refreshSpy).toHaveBeenCalledTimes(1);
+      expect(saveSpy).toHaveBeenCalledTimes(1);
+      expect(app.getOpenMode()).toBe('separate');
     });
   });
 

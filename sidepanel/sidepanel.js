@@ -1048,23 +1048,8 @@
         });
       });
 
-      // Support clicking the card label as well as the radio
-      const separateCard = document.getElementById('open-mode-separate-card');
-      const mergeCard = document.getElementById('open-mode-merge-card');
-      if (separateCard) {
-        separateCard.addEventListener('click', () => {
-          const sepRadio = document.querySelector('input[name="open-mode"][value="separate"]');
-          if (sepRadio) sepRadio.checked = true;
-          sepRadio?.dispatchEvent(new Event('change', { bubbles: true }));
-        });
-      }
-      if (mergeCard) {
-        mergeCard.addEventListener('click', () => {
-          const mergeRadio = document.querySelector('input[name="open-mode"][value="merge"]');
-          if (mergeRadio) mergeRadio.checked = true;
-          mergeRadio?.dispatchEvent(new Event('change', { bubbles: true }));
-        });
-      }
+      // Cards are <label> elements, so clicking activates the radio natively.
+      // The radio 'change' handler above handles state, preview, and preferences.
 
       // Refresh preview when any cleaning option changes
       document.querySelectorAll('#options-panel input[type="checkbox"]').forEach((cb) => {
