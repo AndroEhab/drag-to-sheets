@@ -726,4 +726,76 @@ describe('Merger', () => {
       expect(meta[0][0]).toEqual({ type: 'string', value: 'Name' });
     });
   });
+
+  // ---- cellMeta synthesis from data values ----
+
+  describe('cellMeta synthesis from data', () => {
+    test('merged CSV files get synthesized string tokens', () => {
+      const f1 = makeParsedFile(['Name', 'Age'], ['Alice', '30']);
+      const f2 = makeParsedFile(['Name', 'Age'], ['Bob', '25']);
+      const result = Merger.merge([f1, f2]);
+      const meta = result.sheets[0].cellMeta;
+
+      expect(meta).toBeTruthy();
+      expect(meta).toHaveLength(3); // header + 2 data rows
+      expect(meta[0]).toEqual([
+        { type: 'string', value: 'Name' },
+        { type: 'string', value: 'Age' },
+      ]);
+      expect(meta[1]).toEqual([
+        { type: 'string', value: 'Alice' },
+        { type: 'string', value: '30' },
+      ]);
+      expect(meta[2]).toEqual([
+        { type: 'string', value: 'Bob' },
+        { type: 'string', value: '25' },
+      ]);
+    });
+
+    test('merged mixed CSV + Excel preserves Excel types and CSV string tokens', () => {
+      const csvFile = makeParsedFile(['Name', 'Score'], ['Alice', '95']);
+      const excelFile = {
+        sheets: [{
+          name: 'E1',
+          data: [['Name', 'Score'], ['Bob', 88]],
+          cellMeta: [[{ type: 'string', value: 'Name' }, { type: 'string', value: 'Score' }], [{ type: 'string', value: 'Bob' }, { type: 'number', value: 88 }]],
+        }],
+      };
+      const result = Merger.merge([csvFile, excelFile]);
+      const meta = result.sheets[0].cellMeta;
+
+      expect(meta[1][0]).toEqual({ type: 'string', value: 'Alice' });
+      expect(meta[1][1]).toEqual({ type: 'string', value: '95' });
+      expect(meta[2][0]).toEqual({ type: 'string', value: 'Bob' });
+      expect(meta[2][1]).toEqual({ type: 'number', value: 88 });
+    });
+
+    test('merged two metadata-less sheets still produces complete cellMeta', () => {
+      const f1 = makeParsedFile(['A', 'B'], ['x', '']);
+      const f2 = makeParsedFile(['A', 'B'], ['', 'y']);
+      const result = Merger.merge([f1, f2]);
+      const meta = result.sheets[0].cellMeta;
+
+      expect(meta).toHaveLength(3);
+      expect(meta[1][1]).toEqual({ type: 'empty' });
+      expect(meta[2][0]).toEqual({ type: 'empty' });
+      expect(meta[2][1]).toEqual({ type: 'string', value: 'y' });
+    });
+
+    test('cellMeta synthesized from data does not produce empty tokens for non-empty values', () => {
+      const f1 = {
+        sheets: [{
+          name: 'S1',
+          data: [['Value'], [42], [true], [0], ['']],
+        }],
+      };
+      const result = Merger.merge([f1]);
+      const meta = result.sheets[0].cellMeta;
+
+      expect(meta[1][0]).toEqual({ type: 'number', value: 42 });
+      expect(meta[2][0]).toEqual({ type: 'boolean', value: true });
+      expect(meta[3][0]).toEqual({ type: 'number', value: 0 });
+      expect(meta[4][0]).toEqual({ type: 'empty' });
+    });
+  });
 });

@@ -580,11 +580,29 @@ const Parser = (() => {
    * @returns {boolean}
    */
   function hasTypedCellMetadata(parsed) {
-    if (!parsed || !Array.isArray(parsed.sheets)) return false;
-    return parsed.sheets.every(sheet => 
-      Array.isArray(sheet.cellMeta) && 
-      sheet.cellMeta.length === sheet.data.length
-    );
+    if (!parsed || !Array.isArray(parsed.sheets) || parsed.sheets.length === 0) return false;
+    const VALID_TYPES = new Set(['empty', 'string', 'number', 'boolean', 'formula', 'date']);
+    const DATE_TYPES = new Set(['DATE', 'TIME', 'DATE_TIME']);
+
+    return parsed.sheets.every(sheet => {
+      if (!Array.isArray(sheet.data) || !Array.isArray(sheet.cellMeta)) return false;
+      if (sheet.cellMeta.length !== sheet.data.length) return false;
+
+      return sheet.cellMeta.every((metaRow, ri) => {
+        if (!Array.isArray(metaRow)) return false;
+        const dataRow = sheet.data[ri];
+        const width = dataRow ? dataRow.length : 0;
+        if (metaRow.length < width) return false;
+
+        return metaRow.every((token, ci) => {
+          if (!token || typeof token !== 'object') return false;
+          if (!VALID_TYPES.has(token.type)) return false;
+          if (token.type === 'formula' && (!token.value || typeof token.value !== 'string' || token.value.trim() === '')) return false;
+          if (token.type === 'date' && (!token.formatType || !DATE_TYPES.has(token.formatType))) return false;
+          return true;
+        });
+      });
+    });
   }
 
   // ---- Public API ----

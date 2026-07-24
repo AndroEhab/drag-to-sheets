@@ -70,18 +70,18 @@ const Merger = (() => {
 
     if (indexed.length === 1) {
       const raw = indexed[0].sheet.data;
-      const rawMeta = indexed[0].sheet.cellMeta || null;
+      const rawMeta = indexed[0].sheet.cellMeta || synthesizeMetaFromData(raw);
       const wantSM = Boolean(options.includeSourceMap);
       const identity = wantSM ? (raw[0] ? raw[0].map((_, i) => i) : []) : null;
       // Keep header, then all non-empty data rows
       const data = [raw[0]];
-      const meta = rawMeta ? [rawMeta[0]] : null;
+      const meta = [rawMeta[0]];
       const sourceMap = wantSM
         ? [{ fileIndex: indexed[0].originalIndex, sourceRow: 0, colMap: identity }]
         : [];
       for (let i = 1; i < raw.length; i++) {
         data.push(raw[i]);
-        if (rawMeta) meta.push(rawMeta[i]);
+        meta.push(rawMeta[i]);
         if (wantSM) {
           sourceMap.push({
             fileIndex: indexed[0].originalIndex,
@@ -142,7 +142,7 @@ const Merger = (() => {
       const { sheet, originalIndex } = indexed[fi];
       const sheetData = sheet.data;
       const rowCount = sheetData.length;
-      const sheetMeta = sheet.cellMeta || null;
+      const sheetMeta = sheet.cellMeta || synthesizeMetaFromData(sheetData);
 
       // Build column mapping: source index → unified index
       const colMap = resolveFileHeaders(sheetData[0] || []).map(
@@ -186,6 +186,22 @@ const Merger = (() => {
     }
 
     return { sheets: [{ name: 'Merged', data: mergedData, cellMeta: mergedCellMeta }], sourceMap };
+  }
+
+  /**
+   * Synthesize cellMeta tokens from raw data values when no metadata exists.
+   * CSV/TSV files never have cellMeta, so this generates typed tokens from values.
+   */
+  function synthesizeMetaFromData(data) {
+    if (!Array.isArray(data)) return null;
+    return data.map(row =>
+      row.map(cell => {
+        if (cell === null || cell === undefined || cell === '') return { type: 'empty' };
+        if (typeof cell === 'number') return { type: 'number', value: cell };
+        if (typeof cell === 'boolean') return { type: 'boolean', value: cell };
+        return { type: 'string', value: String(cell) };
+      })
+    );
   }
 
   /**

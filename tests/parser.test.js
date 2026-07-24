@@ -530,4 +530,130 @@ describe('Parser', () => {
       await expect(Parser.parse(file)).rejects.toThrow('Unsupported file type: .');
     });
   });
+
+  // ---- hasTypedCellMetadata ----
+
+  describe('hasTypedCellMetadata', () => {
+    test('returns false for null input', () => {
+      expect(Parser.hasTypedCellMetadata(null)).toBe(false);
+    });
+
+    test('returns false for undefined input', () => {
+      expect(Parser.hasTypedCellMetadata(undefined)).toBe(false);
+    });
+
+    test('returns false for object without sheets', () => {
+      expect(Parser.hasTypedCellMetadata({})).toBe(false);
+    });
+
+    test('returns false for empty sheets array', () => {
+      expect(Parser.hasTypedCellMetadata({ sheets: [] })).toBe(false);
+    });
+
+    test('missing metadata row fails hasTypedCellMetadata', () => {
+      const parsed = {
+        sheets: [{
+          name: 'S1',
+          data: [['A'], ['1']],
+          cellMeta: [[{ type: 'string', value: 'A' }]],
+        }],
+      };
+      expect(Parser.hasTypedCellMetadata(parsed)).toBe(false);
+    });
+
+    test('missing metadata column fails hasTypedCellMetadata', () => {
+      const parsed = {
+        sheets: [{
+          name: 'S1',
+          data: [['A', 'B']],
+          cellMeta: [[{ type: 'string', value: 'A' }]],
+        }],
+      };
+      expect(Parser.hasTypedCellMetadata(parsed)).toBe(false);
+    });
+
+    test('null metadata row fails hasTypedCellMetadata', () => {
+      const parsed = {
+        sheets: [{
+          name: 'S1',
+          data: [['A']],
+          cellMeta: [null],
+        }],
+      };
+      expect(Parser.hasTypedCellMetadata(parsed)).toBe(false);
+    });
+
+    test('invalid token type fails hasTypedCellMetadata', () => {
+      const parsed = {
+        sheets: [{
+          name: 'S1',
+          data: [['A']],
+          cellMeta: [[{ type: 'invalid_type', value: 'A' }]],
+        }],
+      };
+      expect(Parser.hasTypedCellMetadata(parsed)).toBe(false);
+    });
+
+    test('formula token without formula text fails hasTypedCellMetadata', () => {
+      const parsed = {
+        sheets: [{
+          name: 'S1',
+          data: [['Result']],
+          cellMeta: [[{ type: 'formula', value: '' }]],
+        }],
+      };
+      expect(Parser.hasTypedCellMetadata(parsed)).toBe(false);
+    });
+
+    test('valid complete WASM metadata passes', () => {
+      const parsed = {
+        sheets: [{
+          name: 'S1',
+          data: [['Name', 'Age', 'Active', 'Joined']],
+          cellMeta: [[
+            { type: 'string', value: 'Name' },
+            { type: 'number', value: 0 },
+            { type: 'boolean', value: false },
+            { type: 'date', value: 45306, formatType: 'DATE' },
+          ]],
+        }],
+      };
+      expect(Parser.hasTypedCellMetadata(parsed)).toBe(true);
+    });
+
+    test('formula token with text passes', () => {
+      const parsed = {
+        sheets: [{
+          name: 'S1',
+          data: [['Result']],
+          cellMeta: [[{ type: 'formula', value: '=SUM(A1:A3)' }]],
+        }],
+      };
+      expect(Parser.hasTypedCellMetadata(parsed)).toBe(true);
+    });
+
+    test('empty token type passes', () => {
+      const parsed = {
+        sheets: [{
+          name: 'S1',
+          data: [['Value']],
+          cellMeta: [[{ type: 'empty' }]],
+        }],
+      };
+      expect(Parser.hasTypedCellMetadata(parsed)).toBe(true);
+    });
+
+    test('date token with valid formatType passes', () => {
+      for (const fmt of ['DATE', 'TIME', 'DATE_TIME']) {
+        const parsed = {
+          sheets: [{
+            name: 'S1',
+            data: [['Field']],
+            cellMeta: [[{ type: 'date', value: 1, formatType: fmt }]],
+          }],
+        };
+        expect(Parser.hasTypedCellMetadata(parsed)).toBe(true);
+      }
+    });
+  });
 });

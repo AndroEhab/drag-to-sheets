@@ -826,6 +826,133 @@ describe('GoogleAPI', () => {
       expect(rows[0].values[0].userEnteredValue).toHaveProperty('stringValue', '=SUM(A1:A3)');
       expect(rows[0].values[0].userEnteredValue).not.toHaveProperty('formulaValue');
     });
+
+    test('non-empty data with null token uses data value type', async () => {
+      mockFetchSequence(
+        {
+          spreadsheetId: 's1',
+          spreadsheetUrl: 'url',
+          sheets: [{ properties: { sheetId: 0, title: 'Sheet1' } }],
+        },
+        {
+          sheets: [{ properties: { sheetId: 0, title: 'Sheet1' } }],
+        },
+        {},
+        {}
+      );
+
+      await GoogleAPI.createSpreadsheet('Types', [
+        {
+          name: 'Sheet1',
+          data: [['Num', 'Bool', 'Str'], [42, true, 'hello']],
+          cellMeta: [
+            [null, null, null],
+            [null, null, null],
+          ],
+        },
+      ]);
+
+      const batchCall = global.fetch.mock.calls[2];
+      const body = JSON.parse(batchCall[1].body);
+      const rows = body.requests[0].updateCells.rows;
+      expect(rows[1].values[0].userEnteredValue).toEqual({ numberValue: 42 });
+      expect(rows[1].values[1].userEnteredValue).toEqual({ boolValue: true });
+      expect(rows[1].values[2].userEnteredValue).toEqual({ stringValue: 'hello' });
+    });
+
+    test('DATE token writes numberFormat', async () => {
+      mockFetchSequence(
+        {
+          spreadsheetId: 's1',
+          spreadsheetUrl: 'url',
+          sheets: [{ properties: { sheetId: 0, title: 'Sheet1' } }],
+        },
+        {
+          sheets: [{ properties: { sheetId: 0, title: 'Sheet1' } }],
+        },
+        {},
+        {}
+      );
+
+      await GoogleAPI.createSpreadsheet('Dates', [
+        {
+          name: 'Sheet1',
+          data: [['Date']],
+          cellMeta: [[{ type: 'date', value: 45306, formatType: 'DATE' }]],
+        },
+      ]);
+
+      const batchCall = global.fetch.mock.calls[2];
+      const body = JSON.parse(batchCall[1].body);
+      const cell = body.requests[0].updateCells.rows[0].values[0];
+      expect(cell.userEnteredValue).toEqual({ numberValue: 45306 });
+      expect(cell.userEnteredFormat).toEqual({
+        numberFormat: { type: 'DATE', pattern: 'yyyy-mm-dd' },
+      });
+      expect(body.requests[0].updateCells.fields).toBe('userEnteredValue,userEnteredFormat');
+    });
+
+    test('TIME token writes numberFormat', async () => {
+      mockFetchSequence(
+        {
+          spreadsheetId: 's1',
+          spreadsheetUrl: 'url',
+          sheets: [{ properties: { sheetId: 0, title: 'Sheet1' } }],
+        },
+        {
+          sheets: [{ properties: { sheetId: 0, title: 'Sheet1' } }],
+        },
+        {},
+        {}
+      );
+
+      await GoogleAPI.createSpreadsheet('Times', [
+        {
+          name: 'Sheet1',
+          data: [['Time']],
+          cellMeta: [[{ type: 'date', value: 0.6041666666666666, formatType: 'TIME' }]],
+        },
+      ]);
+
+      const batchCall = global.fetch.mock.calls[2];
+      const body = JSON.parse(batchCall[1].body);
+      const cell = body.requests[0].updateCells.rows[0].values[0];
+      expect(cell.userEnteredValue).toEqual({ numberValue: 0.6041666666666666 });
+      expect(cell.userEnteredFormat).toEqual({
+        numberFormat: { type: 'TIME', pattern: 'hh:mm:ss' },
+      });
+    });
+
+    test('DATE_TIME token writes numberFormat', async () => {
+      mockFetchSequence(
+        {
+          spreadsheetId: 's1',
+          spreadsheetUrl: 'url',
+          sheets: [{ properties: { sheetId: 0, title: 'Sheet1' } }],
+        },
+        {
+          sheets: [{ properties: { sheetId: 0, title: 'Sheet1' } }],
+        },
+        {},
+        {}
+      );
+
+      await GoogleAPI.createSpreadsheet('Timestamps', [
+        {
+          name: 'Sheet1',
+          data: [['Timestamp']],
+          cellMeta: [[{ type: 'date', value: 45306.604166666664, formatType: 'DATE_TIME' }]],
+        },
+      ]);
+
+      const batchCall = global.fetch.mock.calls[2];
+      const body = JSON.parse(batchCall[1].body);
+      const cell = body.requests[0].updateCells.rows[0].values[0];
+      expect(cell.userEnteredValue).toEqual({ numberValue: 45306.604166666664 });
+      expect(cell.userEnteredFormat).toEqual({
+        numberFormat: { type: 'DATE_TIME', pattern: 'yyyy-mm-dd hh:mm:ss' },
+      });
+    });
   });
 
   // ================================================================

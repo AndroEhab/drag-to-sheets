@@ -240,7 +240,9 @@ const GoogleAPI = (() => {
     const rows = data.map((row, ri) => ({
       values: row.map((cell, ci) => {
         const token = cellMeta && cellMeta[ri] && cellMeta[ri][ci];
-        if (token) {
+        const dataValue = cell;
+
+        if (token && token.type && token.type !== 'empty') {
           switch (token.type) {
             case 'formula':
               return { userEnteredValue: { formulaValue: toSheetsFormula(token.value) } };
@@ -248,19 +250,32 @@ const GoogleAPI = (() => {
               return { userEnteredValue: { numberValue: token.value } };
             case 'boolean':
               return { userEnteredValue: { boolValue: token.value } };
-            case 'date':
-              return { userEnteredValue: { numberValue: token.value } };
+            case 'date': {
+              const fmtType = token.formatType || 'DATE';
+              const patterns = { DATE: 'yyyy-mm-dd', TIME: 'hh:mm:ss', DATE_TIME: 'yyyy-mm-dd hh:mm:ss' };
+              return {
+                userEnteredValue: { numberValue: token.value },
+                userEnteredFormat: {
+                  numberFormat: { type: fmtType, pattern: patterns[fmtType] || patterns.DATE },
+                },
+              };
+            }
             case 'string': {
               const str = String(token.value ?? '');
               return { userEnteredValue: { stringValue: str } };
             }
-            case 'empty':
-              return {};
             default:
               return { userEnteredValue: { stringValue: String(cell ?? '') } };
           }
         }
-        return { userEnteredValue: { stringValue: String(cell ?? '') } };
+
+        if (dataValue !== null && dataValue !== undefined && dataValue !== '') {
+          if (typeof dataValue === 'number') return { userEnteredValue: { numberValue: dataValue } };
+          if (typeof dataValue === 'boolean') return { userEnteredValue: { boolValue: dataValue } };
+          return { userEnteredValue: { stringValue: String(dataValue) } };
+        }
+
+        return {};
       }),
     }));
     return rows;
@@ -820,7 +835,7 @@ const GoogleAPI = (() => {
         requests.push({
           updateCells: {
             rows,
-            fields: 'userEnteredValue',
+            fields: 'userEnteredValue,userEnteredFormat',
             range: {
               sheetId,
               startRowIndex: 0,

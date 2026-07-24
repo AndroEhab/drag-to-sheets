@@ -1304,6 +1304,45 @@
 
           for (const entry of mapped) {
             if (entry.parsed) {
+              const ext = entry.ext || '';
+              if (ext === 'xlsx' || ext === 'xls') {
+                if (Parser.hasTypedCellMetadata(entry.parsed)) {
+                  validEntries.push(entry);
+                  continue;
+                }
+
+                if (entry.file && entry.file.name) {
+                  try {
+                    entry.parsed = null;
+                    entry.stats = null;
+                    entry.lazy = true;
+                    validEntries.push(entry);
+                    continue;
+                  } catch (_) { /* fall through */ }
+                }
+
+                if (entry.handleId && typeof FileHandleStore !== 'undefined') {
+                  try {
+                    const handle = await FileHandleStore.getHandle(entry.handleId);
+                    if (handle && typeof handle.getFile === 'function') {
+                      const file = await handle.getFile();
+                      if (file && file.name) {
+                        entry.file = file;
+                        entry.fileHandle = handle;
+                        entry.parsed = null;
+                        entry.stats = null;
+                        entry.lazy = true;
+                        validEntries.push(entry);
+                        continue;
+                      }
+                    }
+                  } catch (_) { /* handle recovery not possible */ }
+                }
+
+                prunedNames.push(entry.name);
+                continue;
+              }
+
               validEntries.push(entry);
               continue;
             }
@@ -2757,6 +2796,7 @@
               includeSourceMap: true,
             });
             const mergedData = merged.sheets[0]?.data || [];
+            const mergedMeta = merged.sheets[0]?.cellMeta || null;
             const sourceMap = merged.sourceMap || [];
             const colCount = mergedData[0]?.length || 0;
 
@@ -2806,6 +2846,7 @@
             const result = await GoogleAPI.createSpreadsheet(title, [{
               name: 'Merged',
               data: mergedData,
+              cellMeta: mergedMeta,
             }], apiContext);
 
             // Step 4: Apply merged formatting

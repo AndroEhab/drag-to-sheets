@@ -12,10 +12,32 @@ global.Parser = {
   isExcelSupported: jest.fn(() => true),
   parse: jest.fn(),
   preview: jest.fn(),
+  hasTypedCellMetadata: jest.fn((parsed) => {
+    if (!parsed || !Array.isArray(parsed.sheets)) return false;
+    const VALID_TYPES = new Set(['empty', 'string', 'number', 'boolean', 'formula', 'date']);
+    const DATE_TYPES = new Set(['DATE', 'TIME', 'DATE_TIME']);
+    return parsed.sheets.every(sheet => {
+      if (!Array.isArray(sheet.data) || !Array.isArray(sheet.cellMeta)) return false;
+      if (sheet.cellMeta.length !== sheet.data.length) return false;
+      return sheet.cellMeta.every((metaRow, ri) => {
+        if (!Array.isArray(metaRow)) return false;
+        const dataRow = sheet.data[ri];
+        const width = dataRow ? dataRow.length : 0;
+        if (metaRow.length < width) return false;
+        return metaRow.every((token) => {
+          if (!token || typeof token !== 'object') return false;
+          if (!VALID_TYPES.has(token.type)) return false;
+          if (token.type === 'formula' && (!token.value || typeof token.value !== 'string' || token.value.trim() === '')) return false;
+          if (token.type === 'date' && (!token.formatType || !DATE_TYPES.has(token.formatType))) return false;
+          return true;
+        });
+      });
+    });
+  }),
 };
 
 global.Cleaner = {
-  apply: jest.fn((data) => data),
+  apply: jest.fn((data, options, cellMeta) => ({ data, cellMeta: cellMeta || null })),
 };
 
 global.Merger = {
@@ -598,13 +620,13 @@ describe('DragToSheetsApp', () => {
       expect(app.loadingText.textContent).toContain('"bad.xlsx"');
     });
 
-    test('does not prune entry when parsed data is available even without file', async () => {
+    test('does not prune entry when parsed data has cellMeta despite no file object', async () => {
       chrome.storage.session.get.mockResolvedValue({
         files: [{
           name: 'data.xlsx',
           ext: 'xlsx',
           size: 8192,
-          sheets: [{ name: 'Data', data: [['B', 'C'], ['2', '3']] }],
+          sheets: [{ name: 'Data', data: [['B', 'C'], ['2', '3']], cellMeta: [[{ type: 'string', value: 'B' }, { type: 'string', value: 'C' }], [{ type: 'string', value: '2' }, { type: 'string', value: '3' }]] }],
           lazy: false,
           handleId: null,
         }],
@@ -1680,6 +1702,148 @@ describe('DragToSheetsApp', () => {
 
       await app.toggleUrlBar(); // closes
       expect(app.urlBar.classList.contains('hidden')).toBe(true);
+    });
+  });
+
+  // ---- Merged CSV integration ----
+
+  describe('merged CSV integration', () => {
+    test('merged CSV files produce sheets with cellMeta passed to createSpreadsheet', async () => {
+      const app = await createApp();
+
+      const mergedMeta = [
+        [{ type: 'string', value: 'Name' }, { type: 'string', value: 'Age' }],
+        [{ type: 'string', value: 'Alice' }, { type: 'string', value: '30' }],
+        [{ type: 'string', value: 'Bob' }, { type: 'string', value: '25' }],
+      ];
+
+      Merger.merge.mockReturnValue({
+        sheets: [{
+          name: 'Merged',
+          data: [['Name', 'Age'], ['Alice', '30'], ['Bob', '25']],
+          cellMeta: mergedMeta,
+        }],
+        sourceMap: [],
+      });
+
+      document.querySelector('input[name="open-mode"][value="merge"]').checked = true;
+      app.files = [
+        {
+          file: new File(['a,b'], 'a.csv'),
+          parsed: { sheets: [{ name: 'a', data: [['Name', 'Age'], ['Alice', '30']] }] },
+          name: 'a.csv', ext: 'csv', size: 1024,
+          stats: { sheetCount: 1, rowCount: 2, colCount: 2, cellCount: 4, styledCellCount: 0 },
+          identityKey: 'a.csv::csv::1024::0',
+          contentFingerprint: 'abc1',
+          lazy: false,
+        },
+        {
+          file: new File(['c,d'], 'b.csv'),
+          parsed: { sheets: [{ name: 'b', data: [['Name', 'Age'], ['Bob', '25']] }] },
+          name: 'b.csv', ext: 'csv', size: 1024,
+          stats: { sheetCount: 1, rowCount: 2, colCount: 2, cellCount: 4, styledCellCount: 0 },
+          identityKey: 'b.csv::csv::1024::1',
+          contentFingerprint: 'def2',
+          lazy: false,
+        },
+      ];
+
+      document.getElementById('opt-trim').checked = false;
+      document.getElementById('opt-empty-rows').checked = false;
+      document.getElementById('opt-empty-cols').checked = false;
+      document.getElementById('opt-duplicates').checked = false;
+      document.getElementById('opt-numbers').checked = false;
+      document.getElementById('opt-headers').checked = false;
+
+      GoogleAPI.createSpreadsheet.mockClear();
+
+      await app.handleUpload();
+
+      expect(GoogleAPI.createSpreadsheet).toHaveBeenCalled();
+
+      const callArgs = GoogleAPI.createSpreadsheet.mock.calls[0];
+      const sheetsArg = callArgs[1];
+      expect(sheetsArg[0].cellMeta).toEqual(mergedMeta);
+    });
+  });
+
+  // ---- Excel formula survives formatting-preserving merge ----
+
+  describe('Excel formula survives merge', () => {
+    test('Excel formula survives formatting-preserving merge upload path', async () => {
+      const app = await createApp();
+
+      const formulaMeta = [
+        [{ type: 'string', value: 'Result' }],
+        [{ type: 'formula', value: '=SUM(A2:A5)' }],
+      ];
+
+      Merger.merge.mockReturnValue({
+        sheets: [{
+          name: 'Merged',
+          data: [['Result'], [0]],
+          cellMeta: formulaMeta,
+        }],
+        sourceMap: [
+          { fileIndex: 0, sourceRow: 0, colMap: [0] },
+          { fileIndex: 0, sourceRow: 1, colMap: [0] },
+        ],
+      });
+
+      document.querySelector('input[name="open-mode"][value="merge"]').checked = true;
+      app.files = [
+        {
+          file: new File([new ArrayBuffer(10)], 'formula.xlsx'),
+          parsed: {
+            sheets: [{
+              name: 'Sheet1',
+              data: [['Result'], [0]],
+              cellMeta: formulaMeta,
+              styles: [],
+            }],
+            themeColors: [],
+          },
+          name: 'formula.xlsx', ext: 'xlsx', size: 4096,
+          stats: { sheetCount: 1, rowCount: 2, colCount: 1, cellCount: 2, styledCellCount: 0 },
+          identityKey: 'formula.xlsx::xlsx::4096::0',
+          contentFingerprint: 'form1',
+          lazy: false,
+        },
+        {
+          file: new File([new ArrayBuffer(10)], 'other.xlsx'),
+          parsed: {
+            sheets: [{
+              name: 'Sheet1',
+              data: [['Result'], [0]],
+              cellMeta: formulaMeta,
+              styles: [],
+            }],
+            themeColors: [],
+          },
+          name: 'other.xlsx', ext: 'xlsx', size: 4096,
+          stats: { sheetCount: 1, rowCount: 2, colCount: 1, cellCount: 2, styledCellCount: 0 },
+          identityKey: 'other.xlsx::xlsx::4096::1',
+          contentFingerprint: 'form2',
+          lazy: false,
+        },
+      ];
+
+      document.getElementById('opt-trim').checked = false;
+      document.getElementById('opt-empty-rows').checked = false;
+      document.getElementById('opt-empty-cols').checked = false;
+      document.getElementById('opt-duplicates').checked = false;
+      document.getElementById('opt-numbers').checked = false;
+      document.getElementById('opt-headers').checked = false;
+
+      GoogleAPI.createSpreadsheet.mockClear();
+
+      await app.handleUpload();
+
+      expect(GoogleAPI.createSpreadsheet).toHaveBeenCalled();
+
+      const callArgs = GoogleAPI.createSpreadsheet.mock.calls[0];
+      const sheetsArg = callArgs[1];
+      expect(sheetsArg[0].cellMeta).toEqual(formulaMeta);
     });
   });
 });
