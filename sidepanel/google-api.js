@@ -491,36 +491,53 @@ const GoogleAPI = (() => {
 
       // ---- Value-level changes (trim, fix numbers, normalize headers) ----
       if (options.trim || options.fixNumbers || options.normalizeHeaders) {
-        // Re-read with FORMULA to get raw user-entered values and detect formula cells.
-        // FORMULA returns numbers as JS numbers, strings as JS strings,
-        // formulas as strings starting with "=", and booleans as JS booleans.
-        const formulaResult = await apiRequest(
-          `${SHEETS_BASE}/${spreadsheetId}/values/${range}?valueRenderOption=FORMULA`,
+        // Read grid data with CellData fields to positively identify cell types.
+        // userEnteredValue distinguishes formulas, numbers, strings, and booleans.
+        // effectiveFormat.numberFormat.type exposes DATE, TIME, TEXT, etc.
+        const GRID_FIELDS = 'sheets(data(rowData(values(userEnteredValue,effectiveFormat(numberFormat)))))';
+        const gridResult = await apiRequest(
+          `${SHEETS_BASE}/${spreadsheetId}?includeGridData=true&ranges=${encodeURIComponent(escapeSheetName(sheetTitle))}&fields=${encodeURIComponent(GRID_FIELDS)}`,
           {},
           context
         );
-        const formulaData = formulaResult.values || [];
+        const rowData = gridResult.sheets?.[0]?.data?.[0]?.rowData || [];
         const stringUpdates = [];
         const numberUpdates = [];
 
-        for (let r = 0; r < formulaData.length; r++) {
-          if (!formulaData[r]) continue;
-          for (let c = 0; c < formulaData[r].length; c++) {
-            const raw = formulaData[r][c];
+        for (let r = 0; r < rowData.length; r++) {
+          const cells = rowData[r]?.values || [];
+          for (let c = 0; c < cells.length; c++) {
+            const cell = cells[c] || {};
+            const uev = cell.userEnteredValue || {};
+            const fmtType = cell.effectiveFormat?.numberFormat?.type;
 
-            // Skip empty cells
-            if (raw === undefined || raw === null || raw === '') continue;
+            // Skip empty cells — no userEnteredValue at all
+            if (Object.keys(uev).length === 0) continue;
 
-            // Formula cells: FORMULA renders them as strings starting with "="
-            if (typeof raw === 'string' && raw.startsWith('=')) continue;
+            // Positively identified formula — never touch
+            if (uev.formulaValue !== undefined) continue;
+
+            // Typed date/time values — leave unchanged
+            if (fmtType === 'DATE' || fmtType === 'TIME' || fmtType === 'DATE_TIME') continue;
+
+            // Booleans — leave unchanged
+            if (uev.boolValue !== undefined) continue;
+
+            // Existing numeric values — leave unchanged
+            if (uev.numberValue !== undefined) continue;
+
+            // Must be a string value
+            const raw = uev.stringValue;
+            if (raw === undefined || raw === '') continue;
 
             const cellRef = `${escapeSheetName(sheetTitle)}!${colToLetter(c)}${r + 1}`;
             let cur = raw;
-            let valueIsNumber = typeof cur === 'number';
             let changed = false;
+            let valueIsNumber = false;
+            const isTextFormatted = fmtType === 'TEXT';
 
-            // Header normalization — only row 0, only strings
-            if (options.normalizeHeaders && r === 0 && typeof cur === 'string') {
+            // Header normalization — only row 0
+            if (options.normalizeHeaders && r === 0) {
               const normalized = normalizeHeaderTitleCase(cur);
               if (normalized !== cur && normalized.length > 0) {
                 cur = normalized;
@@ -528,8 +545,8 @@ const GoogleAPI = (() => {
               }
             }
 
-            // Trim — only string values
-            if (options.trim && typeof cur === 'string') {
+            // Trim
+            if (options.trim) {
               const trimmed = cur.trim();
               if (trimmed !== cur) {
                 cur = trimmed;
@@ -537,13 +554,12 @@ const GoogleAPI = (() => {
               }
             }
 
-            // Fix numbers — data rows only, only string values
-            if (options.fixNumbers && r > 0 && typeof cur === 'string') {
+            // Fix numbers — data rows only, skip TEXT-formatted cells
+            if (options.fixNumbers && r > 0 && !isTextFormatted) {
               const cleaned = cur.replace(/[,\s]/g, '');
               if (/^-?\d+(\.\d+)?$/.test(cleaned) && cleaned !== cur) {
                 changed = true;
                 if (cleaned.length > 1 && cleaned.startsWith('0') && !cleaned.startsWith('0.')) {
-                  // Leading-zero identifier (postal code, SKU, etc.) — keep as string
                   cur = cleaned;
                   valueIsNumber = false;
                 } else {
