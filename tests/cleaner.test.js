@@ -570,4 +570,59 @@ describe('Cleaner', () => {
       expect(result).toEqual([['Val'], ['A'], ['B']]);
     });
   });
+
+  // ---- cellMeta ----
+
+  describe('cellMeta', () => {
+    const allOff = {
+      trim: false,
+      removeEmptyRows: false,
+      removeEmptyColumns: false,
+      removeDuplicates: false,
+      duplicateMode: 'keep-first',
+      fixNumbers: false,
+      normalizeHeaders: false,
+    };
+
+    test('Cleaner does not mutate source cellMeta', () => {
+      const data = [
+        ['  Name  ', ' Age'],
+        [' Alice ', '  30  '],
+      ];
+      const cellMeta = [
+        [{ type: 'string', value: '  Name  ' }, { type: 'string', value: ' Age' }],
+        [{ type: 'string', value: ' Alice ' }, { type: 'string', value: '  30  ' }],
+      ];
+      const sourceMeta = JSON.parse(JSON.stringify(cellMeta));
+      Cleaner.apply(data, { ...allOff, trim: true }, cellMeta);
+      expect(cellMeta).toEqual(sourceMeta);
+    });
+
+    test('fixNumbers updates cellMeta when converting strings to numbers', () => {
+      const data = [['Value'], ['42']];
+      const cellMeta = [[{ type: 'string', value: 'Value' }], [{ type: 'string', value: '42' }]];
+      const result = Cleaner.fixNumberFormatting(data, cellMeta);
+      expect(result.cellMeta[1][0]).toEqual({ type: 'number', value: 42 });
+    });
+
+    test('fixNumbers updates cellMeta for leading-zero cleaned strings', () => {
+      const data = [['Code'], ['0,012,345']];
+      const cellMeta = [[{ type: 'string', value: 'Code' }], [{ type: 'string', value: '0,012,345' }]];
+      const result = Cleaner.fixNumberFormatting(data, cellMeta);
+      expect(result.cellMeta[1][0]).toEqual({ type: 'string', value: '0012345' });
+    });
+
+    test('normalizeHeaders updates header cellMeta tokens', () => {
+      const data = [['first name', 'eMAIL ADDRESS'], ['Alice', 'alice@example.com']];
+      const cellMeta = [
+        [{ type: 'string', value: 'first name' }, { type: 'string', value: 'eMAIL ADDRESS' }],
+        [{ type: 'string', value: 'Alice' }, { type: 'string', value: 'alice@example.com' }],
+      ];
+      const result = Cleaner.normalizeHeaders(data, cellMeta);
+      expect(result.data[0]).toEqual(['First Name', 'Email Address']);
+      expect(result.cellMeta[0][0].value).toBe('First Name');
+      expect(result.cellMeta[0][1].value).toBe('Email Address');
+      expect(result.cellMeta[1]).toEqual(cellMeta[1]);
+    });
+  });
 });

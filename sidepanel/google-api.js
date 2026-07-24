@@ -231,6 +231,11 @@ const GoogleAPI = (() => {
    * Build updateCells rows using typed userEnteredValue objects from
    * cell metadata tokens, preserving formulas, numbers, booleans, etc.
    */
+  function toSheetsFormula(value) {
+    const formula = String(value ?? '');
+    return formula.startsWith('=') ? formula : '=' + formula;
+  }
+
   function buildTypedUpdateRows(data, cellMeta) {
     const rows = data.map((row, ri) => ({
       values: row.map((cell, ci) => {
@@ -238,7 +243,7 @@ const GoogleAPI = (() => {
         if (token) {
           switch (token.type) {
             case 'formula':
-              return { userEnteredValue: { formulaValue: token.value } };
+              return { userEnteredValue: { formulaValue: toSheetsFormula(token.value) } };
             case 'number':
               return { userEnteredValue: { numberValue: token.value } };
             case 'boolean':

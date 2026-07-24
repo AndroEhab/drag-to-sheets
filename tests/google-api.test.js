@@ -740,6 +740,92 @@ describe('GoogleAPI', () => {
         GoogleAPI.createSpreadsheet('Test', [{ name: 'S', data: [['A']] }])
       ).rejects.toThrow('Google API 403');
     });
+
+    test('normalizes SheetJS formula SUM(A1:A3) to =SUM(A1:A3)', async () => {
+      mockFetchSequence(
+        {
+          spreadsheetId: 's1',
+          spreadsheetUrl: 'url',
+          sheets: [{ properties: { sheetId: 0, title: 'Sheet1' } }],
+        },
+        {
+          sheets: [{ properties: { sheetId: 0, title: 'Sheet1' } }],
+        },
+        {},
+        {}
+      );
+
+      await GoogleAPI.createSpreadsheet('Formulas', [
+        {
+          name: 'Sheet1',
+          data: [['Result']],
+          cellMeta: [[{ type: 'formula', value: 'SUM(A1:A3)' }]],
+        },
+      ]);
+
+      const batchCall = global.fetch.mock.calls[2];
+      expect(batchCall[0]).toBe('https://sheets.googleapis.com/v4/spreadsheets/s1:batchUpdate');
+      const body = JSON.parse(batchCall[1].body);
+      const rows = body.requests[0].updateCells.rows;
+      expect(rows[0].values[0].userEnteredValue.formulaValue).toBe('=SUM(A1:A3)');
+    });
+
+    test('does not double-prefix an already-prefixed formula', async () => {
+      mockFetchSequence(
+        {
+          spreadsheetId: 's1',
+          spreadsheetUrl: 'url',
+          sheets: [{ properties: { sheetId: 0, title: 'Sheet1' } }],
+        },
+        {
+          sheets: [{ properties: { sheetId: 0, title: 'Sheet1' } }],
+        },
+        {},
+        {}
+      );
+
+      await GoogleAPI.createSpreadsheet('Formulas', [
+        {
+          name: 'Sheet1',
+          data: [['Result']],
+          cellMeta: [[{ type: 'formula', value: '=SUM(A1:A3)' }]],
+        },
+      ]);
+
+      const batchCall = global.fetch.mock.calls[2];
+      const body = JSON.parse(batchCall[1].body);
+      const rows = body.requests[0].updateCells.rows;
+      expect(rows[0].values[0].userEnteredValue.formulaValue).toBe('=SUM(A1:A3)');
+    });
+
+    test('literal string beginning with = uses stringValue', async () => {
+      mockFetchSequence(
+        {
+          spreadsheetId: 's1',
+          spreadsheetUrl: 'url',
+          sheets: [{ properties: { sheetId: 0, title: 'Sheet1' } }],
+        },
+        {
+          sheets: [{ properties: { sheetId: 0, title: 'Sheet1' } }],
+        },
+        {},
+        {}
+      );
+
+      await GoogleAPI.createSpreadsheet('Strings', [
+        {
+          name: 'Sheet1',
+          data: [['Input']],
+          cellMeta: [[{ type: 'string', value: '=SUM(A1:A3)' }]],
+        },
+      ]);
+
+      const batchCall = global.fetch.mock.calls[2];
+      const body = JSON.parse(batchCall[1].body);
+      const rows = body.requests[0].updateCells.rows;
+      expect(rows[0].values[0].userEnteredValue).toHaveProperty('stringValue', '=SUM(A1:A3)');
+      expect(rows[0].values[0].userEnteredValue).not.toHaveProperty('formulaValue');
+    });
   });
 
   // ================================================================

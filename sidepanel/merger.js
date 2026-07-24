@@ -65,20 +65,23 @@ const Merger = (() => {
       .filter((item) => item.sheet && item.sheet.data.length > 0);
 
     if (indexed.length === 0) {
-      return { sheets: [{ name: 'Merged', data: [] }], sourceMap: [] };
+      return { sheets: [{ name: 'Merged', data: [], cellMeta: null }], sourceMap: [] };
     }
 
     if (indexed.length === 1) {
       const raw = indexed[0].sheet.data;
+      const rawMeta = indexed[0].sheet.cellMeta || null;
       const wantSM = Boolean(options.includeSourceMap);
       const identity = wantSM ? (raw[0] ? raw[0].map((_, i) => i) : []) : null;
       // Keep header, then all non-empty data rows
       const data = [raw[0]];
+      const meta = rawMeta ? [rawMeta[0]] : null;
       const sourceMap = wantSM
         ? [{ fileIndex: indexed[0].originalIndex, sourceRow: 0, colMap: identity }]
         : [];
       for (let i = 1; i < raw.length; i++) {
         data.push(raw[i]);
+        if (rawMeta) meta.push(rawMeta[i]);
         if (wantSM) {
           sourceMap.push({
             fileIndex: indexed[0].originalIndex,
@@ -87,7 +90,7 @@ const Merger = (() => {
           });
         }
       }
-      return { sheets: [{ name: 'Merged', data }], sourceMap };
+      return { sheets: [{ name: 'Merged', data, cellMeta: meta }], sourceMap };
     }
 
     // Build a unified header list preserving first-seen order
@@ -116,6 +119,8 @@ const Merger = (() => {
     const headerLen = unifiedHeaders.length;
     const mergedData = new Array(totalDataRows + 1);
     mergedData[0] = unifiedHeaders;
+    const mergedCellMeta = new Array(totalDataRows + 1);
+    mergedCellMeta[0] = unifiedHeaders.map((h) => ({ type: 'string', value: h }));
 
     // sourceMap is only needed for preserve-formatting upload path
     const wantSourceMap = Boolean(options.includeSourceMap);
@@ -137,6 +142,7 @@ const Merger = (() => {
       const { sheet, originalIndex } = indexed[fi];
       const sheetData = sheet.data;
       const rowCount = sheetData.length;
+      const sheetMeta = sheet.cellMeta || null;
 
       // Build column mapping: source index → unified index
       const colMap = resolveFileHeaders(sheetData[0] || []).map(
@@ -156,6 +162,22 @@ const Merger = (() => {
           }
         }
         mergedData[writeIdx] = newRow;
+
+        // Build cellMeta row with same column mapping
+        const newMetaRow = new Array(headerLen);
+        for (let h = 0; h < headerLen; h++) newMetaRow[h] = { type: 'empty' };
+        if (sheetMeta && sheetMeta[i]) {
+          const srcMetaRow = sheetMeta[i];
+          const metaSrcLen = Math.min(srcMetaRow.length, colMapLen);
+          for (let j = 0; j < metaSrcLen; j++) {
+            const targetIdx = colMap[j];
+            if (targetIdx >= 0 && newMetaRow[targetIdx].type === 'empty') {
+              newMetaRow[targetIdx] = srcMetaRow[j] || { type: 'empty' };
+            }
+          }
+        }
+        mergedCellMeta[writeIdx] = newMetaRow;
+
         if (wantSourceMap) {
           sourceMap[writeIdx] = { fileIndex: originalIndex, sourceRow: i, colMap };
         }
@@ -163,7 +185,7 @@ const Merger = (() => {
       }
     }
 
-    return { sheets: [{ name: 'Merged', data: mergedData }], sourceMap };
+    return { sheets: [{ name: 'Merged', data: mergedData, cellMeta: mergedCellMeta }], sourceMap };
   }
 
   /**

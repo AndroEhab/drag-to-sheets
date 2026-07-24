@@ -648,4 +648,82 @@ describe('Merger', () => {
       expect(headers).toEqual(['X']);
     });
   });
+
+  // ---- cellMeta ----
+
+  describe('cellMeta', () => {
+    test('merged formulas survive as formulas', () => {
+      const f1 = {
+        sheets: [{
+          name: 'S1',
+          data: [['A'], ['val']],
+          cellMeta: [[{ type: 'string', value: 'A' }], [{ type: 'formula', value: 'SUM(1,2)' }]],
+        }],
+      };
+      const f2 = {
+        sheets: [{
+          name: 'S2',
+          data: [['A'], ['val2']],
+          cellMeta: [[{ type: 'string', value: 'A' }], [{ type: 'formula', value: 'SUM(3,4)' }]],
+        }],
+      };
+      const result = Merger.merge([f1, f2]);
+      const meta = result.sheets[0].cellMeta;
+      expect(meta[1][0]).toEqual({ type: 'formula', value: 'SUM(1,2)' });
+      expect(meta[2][0]).toEqual({ type: 'formula', value: 'SUM(3,4)' });
+    });
+
+    test('merged column mappings also map metadata', () => {
+      const f1 = {
+        sheets: [{
+          name: 'S1',
+          data: [['Name', 'Age'], ['Alice', '30']],
+          cellMeta: [[{ type: 'string', value: 'Name' }, { type: 'string', value: 'Age' }], [{ type: 'string', value: 'Alice' }, { type: 'number', value: 30 }]],
+        }],
+      };
+      const f2 = {
+        sheets: [{
+          name: 'S2',
+          data: [['Age', 'City'], ['25', 'NYC']],
+          cellMeta: [[{ type: 'string', value: 'Age' }, { type: 'string', value: 'City' }], [{ type: 'number', value: 25 }, { type: 'string', value: 'NYC' }]],
+        }],
+      };
+      const result = Merger.merge([f1, f2]);
+      const meta = result.sheets[0].cellMeta;
+      // Unified headers: Name, Age, City
+      // f1 row: Alice, 30, empty
+      expect(meta[1]).toEqual([
+        { type: 'string', value: 'Alice' },
+        { type: 'number', value: 30 },
+        { type: 'empty' },
+      ]);
+      // f2 row: empty, 25, NYC
+      expect(meta[2]).toEqual([
+        { type: 'empty' },
+        { type: 'number', value: 25 },
+        { type: 'string', value: 'NYC' },
+      ]);
+    });
+
+    test('generated header cells create string tokens', () => {
+      const f1 = {
+        sheets: [{
+          name: 'S1',
+          data: [['Name'], ['Alice']],
+          cellMeta: [[{ type: 'string', value: 'Name' }], [{ type: 'string', value: 'Alice' }]],
+        }],
+      };
+      const f2 = {
+        sheets: [{
+          name: 'S2',
+          data: [['Name'], ['Bob']],
+          cellMeta: [[{ type: 'string', value: 'Name' }], [{ type: 'string', value: 'Bob' }]],
+        }],
+      };
+      const result = Merger.merge([f1, f2]);
+      const meta = result.sheets[0].cellMeta;
+      // Unified header row should have string tokens
+      expect(meta[0][0]).toEqual({ type: 'string', value: 'Name' });
+    });
+  });
 });

@@ -574,6 +574,19 @@ const Parser = (() => {
     return parts.length > 1 ? parts.pop().toLowerCase() : '';
   }
 
+  /**
+   * Check if a parsed result has typed cell metadata on every sheet.
+   * @param {Object} parsed - A parsed result object
+   * @returns {boolean}
+   */
+  function hasTypedCellMetadata(parsed) {
+    if (!parsed || !Array.isArray(parsed.sheets)) return false;
+    return parsed.sheets.every(sheet => 
+      Array.isArray(sheet.cellMeta) && 
+      sheet.cellMeta.length === sheet.data.length
+    );
+  }
+
   // ---- Public API ----
 
   return {
@@ -645,7 +658,7 @@ const Parser = (() => {
             new Uint8Array(buffer),
             options
           );
-          if (result && Array.isArray(result.sheets)) {
+          if (result && Array.isArray(result.sheets) && hasTypedCellMetadata(result)) {
             return result;
           }
         } catch (_) {
@@ -660,7 +673,7 @@ const Parser = (() => {
             new Uint8Array(buffer),
             options
           );
-          if (result && Array.isArray(result.sheets)) {
+          if (result && Array.isArray(result.sheets) && hasTypedCellMetadata(result)) {
             return result;
           }
         } catch (_) {
@@ -758,5 +771,7 @@ const Parser = (() => {
     isExcelSupported() {
       return typeof XLSX !== 'undefined';
     },
+
+    hasTypedCellMetadata,
   };
 })();

@@ -28,7 +28,7 @@ const Cleaner = (() => {
     if (!hasWork) return cellMeta ? { data, cellMeta } : data;
 
     let result = data;
-    let meta = cellMeta || null;
+    let meta = cellMeta ? cellMeta.map(row => row.map(token => token ? { ...token } : { type: 'empty' })) : null;
 
     if (options.trim) {
       const trimResult = trimWhitespace(result, meta);
@@ -58,7 +58,13 @@ const Cleaner = (() => {
       meta = opResult.cellMeta || null;
     }
     if (options.normalizeHeaders) {
-      result = normalizeHeaders(result);
+      const normResult = normalizeHeaders(result, meta);
+      if (Array.isArray(normResult)) {
+        result = normResult;
+      } else {
+        result = normResult.data;
+        meta = normResult.cellMeta || null;
+      }
     }
 
     return cellMeta ? { data: result, cellMeta: meta } : result;
@@ -222,6 +228,9 @@ const Cleaner = (() => {
         const cleaned = trimmed.replace(/[,\s]/g, '');
         if (/^-?\d+(\.\d+)?$/.test(cleaned)) {
           if (cleaned.length > 1 && cleaned.startsWith('0') && !cleaned.startsWith('0.')) {
+            if (newMeta && newMeta[rowIndex] && newMeta[rowIndex][colIndex]) {
+              newMeta[rowIndex][colIndex] = { type: 'string', value: cleaned };
+            }
             return cleaned;
           }
           const num = Number(cleaned);
@@ -246,20 +255,24 @@ const Cleaner = (() => {
    * - Collapse multiple spaces to one
    * - Convert to Title Case
    */
-  function normalizeHeaders(data) {
-    if (data.length === 0) return data;
+  function normalizeHeaders(data, meta) {
+    if (data.length === 0) return meta ? { data, cellMeta: meta } : data;
 
     const result = [...data];
-    result[0] = data[0].map((header) => {
+    result[0] = data[0].map((header, ci) => {
       if (typeof header !== 'string') return header;
-      return header
+      const normalized = header
         .trim()
         .replace(/\s+/g, ' ')
         .toLowerCase()
         .replace(/\b\w/g, (ch) => ch.toUpperCase());
+      if (meta && meta[0] && meta[0][ci] && meta[0][ci].type === 'string') {
+        meta[0][ci].value = normalized;
+      }
+      return normalized;
     });
 
-    return result;
+    return meta ? { data: result, cellMeta: meta } : result;
   }
 
   /**

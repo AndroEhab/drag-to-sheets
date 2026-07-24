@@ -734,6 +734,7 @@
         sheets: item.parsed.sheets.map((sheet) => ({
           name: sheet.name,
           data: sheet.data,
+          cellMeta: sheet.cellMeta || null,
         })),
       }));
       const mappingContext = this.buildCustomMappingContextFromRawFiles(
@@ -2740,6 +2741,7 @@
               sheets: item.parsed.sheets.map((s) => ({
                 name: s.name,
                 data: s.data,
+                cellMeta: s.cellMeta || null,
               })),
             }));
             const smartMapping = this.isSmartMappingActive();
