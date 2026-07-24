@@ -392,12 +392,29 @@ const GoogleAPI = (() => {
         }
       }
 
+      // Empty columns (right-to-left) — detect before duplicates so keys exclude
+      // empty columns, matching Cleaner's canonical order.
+      const colsToDelete = new Set();
+      if (options.removeEmptyColumns) {
+        const maxCols = Math.max(...data.map((r) => (r ? r.length : 0)), 0);
+        for (let c = maxCols - 1; c >= 0; c--) {
+          if (data.every((row) => !row || !row[c] || !String(row[c]).trim())) {
+            colsToDelete.add(c);
+          }
+        }
+      }
+
       // Duplicate rows (skip header row 0)
       if (options.removeDuplicates) {
         const seen = new Map();
         for (let r = 1; r < data.length; r++) {
           if (rowsToDelete.has(r)) continue;
-          const key = (data[r] || []).map((c) => String(c ?? '')).join('\0');
+          // Exclude columns marked for deletion from the dedup key
+          const key = (data[r] || []).reduce((parts, cell, idx) => {
+            if (colsToDelete.has(idx)) return parts;
+            parts.push(String(cell ?? '').trim());
+            return parts;
+          }, []).join('\0');
           if (!seen.has(key)) seen.set(key, []);
           seen.get(key).push(r);
         }
@@ -423,17 +440,15 @@ const GoogleAPI = (() => {
         });
       }
 
-      // Empty columns (right-to-left)
+      // Empty columns (right-to-left using pre-computed set)
       if (options.removeEmptyColumns) {
-        const maxCols = Math.max(...data.map((r) => (r ? r.length : 0)), 0);
-        for (let c = maxCols - 1; c >= 0; c--) {
-          if (data.every((row) => !row || !row[c] || !String(row[c]).trim())) {
-            deleteRequests.push({
-              deleteDimension: {
-                range: { sheetId, dimension: 'COLUMNS', startIndex: c, endIndex: c + 1 },
-              },
-            });
-          }
+        const sortedCols = [...colsToDelete].sort((a, b) => b - a);
+        for (const c of sortedCols) {
+          deleteRequests.push({
+            deleteDimension: {
+              range: { sheetId, dimension: 'COLUMNS', startIndex: c, endIndex: c + 1 },
+            },
+          });
         }
       }
 

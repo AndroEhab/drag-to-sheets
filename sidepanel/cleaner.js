@@ -163,9 +163,11 @@ const Cleaner = (() => {
         const trimmed = cell.trim();
         if (trimmed === '') return cell;
 
-        // Match integers, decimals, negative numbers, and comma-separated numbers
-        const cleaned = trimmed.replace(/,/g, '');
-        if (/^-?\d+(\.\d+)?$/.test(cleaned)) {
+        const cleaned = trimmed.replace(/[,\s]/g, '');
+        if (/^-?\d+(\.\d+)?$/.test(cleaned) && cleaned !== trimmed) {
+          if (cleaned.length > 1 && cleaned.startsWith('0') && !cleaned.startsWith('0.')) {
+            return cleaned; // Leading-zero identifier — keep as string
+          }
           const num = Number(cleaned);
           if (Number.isFinite(num)) return num;
         }

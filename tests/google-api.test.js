@@ -1,6 +1,7 @@
 const { loadModule } = require('./helpers');
 
 const GoogleAPI = loadModule('../sidepanel/google-api.js', 'GoogleAPI');
+const Cleaner = loadModule('../sidepanel/cleaner.js', 'Cleaner');
 
 describe('GoogleAPI', () => {
   beforeEach(() => {
@@ -1746,6 +1747,304 @@ describe('GoogleAPI', () => {
 
       // Only 2 calls: getSpreadsheetInfo + FORMATTED_VALUE read, then skip
       expect(global.fetch.mock.calls.length).toBe(2);
+    });
+
+    // ---- Parity tests: Cleaner (local) vs cleanUploadedSheet (Sheets API) ----
+
+    test('identifies same duplicates as Cleaner after trimming', async () => {
+      const fixture = [
+        ['Name', 'Score'],
+        ['Alice', '100'],
+        [' Alice ', '100'],  // same as row 1 after trim
+        ['Bob', '200'],
+      ];
+
+      global.fetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            sheets: [{
+              properties: {
+                sheetId: 0,
+                title: 'Sheet1',
+                gridProperties: { rowCount: 10, columnCount: 2 },
+              },
+            }],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ values: fixture }),
+        })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      await GoogleAPI.cleanUploadedSheet('sheet-id', {
+        removeEmptyRows: false,
+        removeEmptyColumns: false,
+        removeDuplicates: true,
+        duplicateMode: 'keep-first',
+        trim: false,
+        fixNumbers: false,
+        normalizeHeaders: false,
+      });
+
+      // Verify row 2 (index 2) is deleted as a duplicate of row 1
+      const deleteBody = JSON.parse(global.fetch.mock.calls[2][1].body);
+      const rowDeletes = deleteBody.requests.filter((r) =>
+        r.deleteDimension?.range?.dimension === 'ROWS'
+      );
+      expect(rowDeletes).toHaveLength(1);
+      expect(rowDeletes[0].deleteDimension.range.startIndex).toBe(2);
+      expect(rowDeletes[0].deleteDimension.range.endIndex).toBe(3);
+    });
+
+    test('identifies same empty rows and columns as Cleaner', async () => {
+      const fixture = [
+        ['A', '', 'C'],
+        ['1', '', '3'],
+        ['', '', ''],
+        ['x', '', 'z'],
+      ];
+
+      global.fetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            sheets: [{
+              properties: {
+                sheetId: 0,
+                title: 'Sheet1',
+                gridProperties: { rowCount: 10, columnCount: 3 },
+              },
+            }],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ values: fixture }),
+        })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      await GoogleAPI.cleanUploadedSheet('sheet-id', {
+        removeEmptyRows: true,
+        removeEmptyColumns: true,
+        removeDuplicates: false,
+        trim: false,
+        fixNumbers: false,
+        normalizeHeaders: false,
+      });
+
+      const deleteBody = JSON.parse(global.fetch.mock.calls[2][1].body);
+      const dimDeletes = deleteBody.requests.filter((r) => r.deleteDimension);
+
+      const rowDeletes = dimDeletes.filter((r) => r.deleteDimension.range.dimension === 'ROWS');
+      const colDeletes = dimDeletes.filter((r) => r.deleteDimension.range.dimension === 'COLUMNS');
+
+      expect(rowDeletes).toHaveLength(1);
+      expect(rowDeletes[0].deleteDimension.range.startIndex).toBe(2); // row 2 is empty
+
+      expect(colDeletes).toHaveLength(1);
+      expect(colDeletes[0].deleteDimension.range.startIndex).toBe(1); // col 1 is empty
+      expect(colDeletes[0].deleteDimension.range.endIndex).toBe(2);
+    });
+
+    test('full pipeline parity: whitespace-sensitive fixture', async () => {
+      const fixture = [
+        ['  Name  ', '  Amount  ', ''],
+        ['  Alice', '1,234', ''],
+        ['Alice  ', '  1,234', ''],
+        ['', '', ''],
+      ];
+
+      // Run through Cleaner
+      const cleanerResult = Cleaner.apply(JSON.parse(JSON.stringify(fixture)), {
+        trim: true,
+        removeEmptyRows: true,
+        removeEmptyColumns: true,
+        removeDuplicates: true,
+        fixNumbers: true,
+        normalizeHeaders: true,
+      });
+      // Expected Cleaner output: [['Name', 'Amount'], ['Alice', 1234]]
+      // Row 0 trimmed + normalized, row 1 and 2 deduped, row 3 removed, col 2 removed
+
+      expect(cleanerResult).toHaveLength(2);
+      expect(cleanerResult[0]).toEqual(['Name', 'Amount']);
+      expect(cleanerResult[1][0]).toBe('Alice');
+      expect(typeof cleanerResult[1][1]).toBe('number');
+      expect(cleanerResult[1][1]).toBe(1234);
+
+      // Run through cleanUploadedSheet
+      global.fetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            sheets: [{
+              properties: {
+                sheetId: 0,
+                title: 'Sheet1',
+                gridProperties: { rowCount: 10, columnCount: 3 },
+              },
+            }],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ values: fixture }),
+        })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve(gridData([
+            [cellS('  Name  '), cellS('  Amount  '), emptyCell()],
+            [cellS('  Alice'), cellS('1,234'), emptyCell()],
+            [cellS('Alice  '), cellS('  1,234'), emptyCell()],
+            [emptyCell(), emptyCell(), emptyCell()],
+          ])),
+        })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      await GoogleAPI.cleanUploadedSheet('sheet-id', {
+        removeEmptyRows: true,
+        removeEmptyColumns: true,
+        removeDuplicates: true,
+        duplicateMode: 'keep-first',
+        trim: true,
+        fixNumbers: true,
+        normalizeHeaders: true,
+      });
+
+      // Call 2: structural batchUpdate (row + col deletes + grid resize)
+      const deleteBody = JSON.parse(global.fetch.mock.calls[2][1].body);
+      const dimDeletes = (deleteBody.requests || []).filter((r) => r.deleteDimension);
+
+      // Row deletes: row 4 (index 3, empty) + row 3 (index 2, duplicate of row 1)
+      const rowDeletes = dimDeletes.filter((r) => r.deleteDimension.range.dimension === 'ROWS')
+        .map((r) => r.deleteDimension.range.startIndex).sort((a, b) => b - a);
+      expect(rowDeletes).toContain(3); // empty row
+      expect(rowDeletes).toContain(2); // duplicate row (same as row 1 after trim)
+
+      // Column delete: col 3 (index 2, empty)
+      const colDeletes = dimDeletes.filter((r) => r.deleteDimension.range.dimension === 'COLUMNS');
+      expect(colDeletes).toHaveLength(1);
+      expect(colDeletes[0].deleteDimension.range.startIndex).toBe(2);
+
+      // Value writes: find all calls with valueInputOption
+      const allCalls = global.fetch.mock.calls;
+      const rawCalls = allCalls.filter((c) => {
+        try { return JSON.parse(c[1].body).valueInputOption === 'RAW'; }
+        catch { return false; }
+      });
+      const userEnteredCalls = allCalls.filter((c) => {
+        try { return JSON.parse(c[1].body).valueInputOption === 'USER_ENTERED'; }
+        catch { return false; }
+      });
+
+      // String updates for trim + normalizeHeaders; number update for fixNumbers
+      expect(rawCalls.length + userEnteredCalls.length).toBeGreaterThanOrEqual(1);
+    });
+
+    test('number type parity: fixNumbers produces same cell types', async () => {
+      const fixture = [
+        ['Price'],
+        ['1,234.56'],
+        ['  0,001  '],
+        ['007'],
+      ];
+
+      // Cleaner path
+      const cleanerResult = Cleaner.apply(JSON.parse(JSON.stringify(fixture)), {
+        trim: true,
+        fixNumbers: true,
+        normalizeHeaders: false,
+        removeEmptyRows: false,
+        removeEmptyColumns: false,
+        removeDuplicates: false,
+      });
+
+      // Row 1: '1,234.56' → trimmed, cleaned → 1234.56 (number)
+      expect(typeof cleanerResult[1][0]).toBe('number');
+      expect(cleanerResult[1][0]).toBe(1234.56);
+      // Row 2: '  0,001  ' → trimmed, cleaned '0001' → leading zero → stays string '0001'
+      expect(typeof cleanerResult[2][0]).toBe('string');
+      expect(cleanerResult[2][0]).toBe('0001');
+      // Row 3: '007' → no commas, '007' === '007' → no change, stays '007' string
+      expect(cleanerResult[3][0]).toBe('007');
+
+      // Sheets API path
+      global.fetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            sheets: [{
+              properties: {
+                sheetId: 0,
+                title: 'Sheet1',
+                gridProperties: { rowCount: 4, columnCount: 1 },
+              },
+            }],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ values: fixture }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve(gridData([
+            [cellS('Price')],
+            [cellS('1,234.56')],
+            [cellS('  0,001  ')],
+            [cellS('007')],
+          ])),
+        })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      await GoogleAPI.cleanUploadedSheet('sheet-id', {
+        removeEmptyRows: false,
+        removeEmptyColumns: false,
+        removeDuplicates: false,
+        trim: true,
+        fixNumbers: true,
+        normalizeHeaders: false,
+      });
+
+      // Calls: 0=info, 1=FORMATTED_VALUE, 2=grid data, then value writes
+      // stringUpdates (RAW) for trim: '  0,001  ' → '0,001'
+      // numberUpdates (USER_ENTERED) for fixNumbers: '1,234.56' → 1234.56
+      const allCalls = global.fetch.mock.calls;
+      expect(allCalls.length).toBe(5); // info + values + grid + string write + number write
+
+      // Find the USER_ENTERED call
+      const numberCall = allCalls.find((call) => {
+        if (call[1] && call[1].body) {
+          try { return JSON.parse(call[1].body).valueInputOption === 'USER_ENTERED'; }
+          catch { return false; }
+        }
+        return false;
+      });
+      expect(numberCall).toBeTruthy();
+      const numberBody = JSON.parse(numberCall[1].body);
+      expect(numberBody.data[0].values[0][0]).toBe(1234.56);
+
+      // Find the RAW call
+      const rawCall = allCalls.find((call) => {
+        if (call[1] && call[1].body) {
+          try { return JSON.parse(call[1].body).valueInputOption === 'RAW'; }
+          catch { return false; }
+        }
+        return false;
+      });
+      expect(rawCall).toBeTruthy();
+      const rawBody = JSON.parse(rawCall[1].body);
+      // Leading-zero identifier: commas removed, stays as string
+      const rawValues = rawBody.data.flatMap((d) => d.values[0]);
+      expect(rawValues).toContain('0001');
     });
   });
 
