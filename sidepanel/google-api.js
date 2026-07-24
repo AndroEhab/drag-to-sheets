@@ -491,51 +491,83 @@ const GoogleAPI = (() => {
 
       // ---- Value-level changes (trim, fix numbers, normalize headers) ----
       if (options.trim || options.fixNumbers || options.normalizeHeaders) {
-        // Re-read after structural changes
-        const freshResult = await apiRequest(
-          `${SHEETS_BASE}/${spreadsheetId}/values/${range}?valueRenderOption=FORMATTED_VALUE`,
+        // Re-read with FORMULA to get raw user-entered values and detect formula cells.
+        // FORMULA returns numbers as JS numbers, strings as JS strings,
+        // formulas as strings starting with "=", and booleans as JS booleans.
+        const formulaResult = await apiRequest(
+          `${SHEETS_BASE}/${spreadsheetId}/values/${range}?valueRenderOption=FORMULA`,
           {},
           context
         );
-        const updatedData = freshResult.values || [];
-        const valueUpdates = [];
+        const formulaData = formulaResult.values || [];
+        const stringUpdates = [];
+        const numberUpdates = [];
 
-        for (let r = 0; r < updatedData.length; r++) {
-          if (!updatedData[r]) continue;
-          for (let c = 0; c < updatedData[r].length; c++) {
-            let val = String(updatedData[r][c] ?? '');
+        for (let r = 0; r < formulaData.length; r++) {
+          if (!formulaData[r]) continue;
+          for (let c = 0; c < formulaData[r].length; c++) {
+            const raw = formulaData[r][c];
+
+            // Skip empty cells
+            if (raw === undefined || raw === null || raw === '') continue;
+
+            // Formula cells: FORMULA renders them as strings starting with "="
+            if (typeof raw === 'string' && raw.startsWith('=')) continue;
+
+            const cellRef = `${escapeSheetName(sheetTitle)}!${colToLetter(c)}${r + 1}`;
+            let cur = raw;
+            let valueIsNumber = typeof cur === 'number';
             let changed = false;
 
-            if (options.trim) {
-              const trimmed = val.trim();
-              if (trimmed !== val) { val = trimmed; changed = true; }
-            }
-
-            if (options.fixNumbers && r > 0) {
-              const cleaned = val.replace(/[,\s]/g, '');
-              if (/^-?\d+(\.\d+)?$/.test(cleaned) && cleaned !== val) {
-                val = cleaned;
+            // Header normalization — only row 0, only strings
+            if (options.normalizeHeaders && r === 0 && typeof cur === 'string') {
+              const normalized = normalizeHeaderTitleCase(cur);
+              if (normalized !== cur && normalized.length > 0) {
+                cur = normalized;
                 changed = true;
               }
             }
 
-            if (options.normalizeHeaders && r === 0) {
-              const normalized = normalizeHeaderTitleCase(val);
-              if (normalized !== val && normalized.length > 0) {
-                val = normalized;
+            // Trim — only string values
+            if (options.trim && typeof cur === 'string') {
+              const trimmed = cur.trim();
+              if (trimmed !== cur) {
+                cur = trimmed;
                 changed = true;
+              }
+            }
+
+            // Fix numbers — data rows only, only string values
+            if (options.fixNumbers && r > 0 && typeof cur === 'string') {
+              const cleaned = cur.replace(/[,\s]/g, '');
+              if (/^-?\d+(\.\d+)?$/.test(cleaned) && cleaned !== cur) {
+                changed = true;
+                if (cleaned.length > 1 && cleaned.startsWith('0') && !cleaned.startsWith('0.')) {
+                  // Leading-zero identifier (postal code, SKU, etc.) — keep as string
+                  cur = cleaned;
+                  valueIsNumber = false;
+                } else {
+                  cur = parseFloat(cleaned);
+                  valueIsNumber = true;
+                }
               }
             }
 
             if (changed) {
-              const cellRef = `${escapeSheetName(sheetTitle)}!${colToLetter(c)}${r + 1}`;
-              valueUpdates.push({ range: cellRef, values: [[val]] });
+              if (valueIsNumber) {
+                numberUpdates.push({ range: cellRef, values: [[cur]] });
+              } else {
+                stringUpdates.push({ range: cellRef, values: [[cur]] });
+              }
             }
           }
         }
 
-        if (valueUpdates.length > 0) {
-          await sendValueRanges(spreadsheetId, valueUpdates, 'RAW', context);
+        if (stringUpdates.length > 0) {
+          await sendValueRanges(spreadsheetId, stringUpdates, 'RAW', context);
+        }
+        if (numberUpdates.length > 0) {
+          await sendValueRanges(spreadsheetId, numberUpdates, 'USER_ENTERED', context);
         }
       }
     }

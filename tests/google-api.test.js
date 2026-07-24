@@ -892,6 +892,467 @@ describe('GoogleAPI', () => {
         { range: "'Sheet1'!B1", values: [['Email Address']] },
       ]);
     });
+
+    test('skips formula cells during value-level cleaning', async () => {
+      global.fetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            sheets: [{
+              properties: {
+                sheetId: 0,
+                title: 'Sheet1',
+                gridProperties: { rowCount: 3, columnCount: 2 },
+              },
+            }],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            values: [
+              ['Name', 'Total'],
+              ['Alice', '=SUM(B2:B2)'],
+              ['Bob', '=A3&" test"'],
+            ],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          // FORMULA read: formulas come as raw strings starting with "="
+          json: () => Promise.resolve({
+            values: [
+              ['Name', 'Total'],
+              ['Alice', '=SUM(B2:B2)'],
+              ['Bob', '=A3&" test"'],
+            ],
+          }),
+        })
+        // No value updates expected — all data cells are formulas, header already clean
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) }); // just in case
+
+      await GoogleAPI.cleanUploadedSheet('sheet-id', {
+        removeEmptyRows: false,
+        removeEmptyColumns: false,
+        removeDuplicates: false,
+        trim: true,
+        fixNumbers: true,
+        normalizeHeaders: false,
+      });
+
+      // The third fetch call should be the value-write (None since all data rows are formulas)
+      // Verify no value updates were sent — the structural calls (spreadsheet get + values get + formula get)
+      // are the first 3 calls. The 4th mock was a safety net.
+      const allCalls = global.fetch.mock.calls;
+      expect(allCalls.length).toBe(3); // info, FORMATTED_VALUE read, FORMULA read — no writes
+    });
+
+    test('fix number formatting converts plain numeric text to actual numbers', async () => {
+      global.fetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            sheets: [{
+              properties: {
+                sheetId: 0,
+                title: 'Sheet1',
+                gridProperties: { rowCount: 2, columnCount: 1 },
+              },
+            }],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            values: [['Amount'], ['1,234']],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          // FORMULA read: "1,234" is a string (entered as text with comma)
+          json: () => Promise.resolve({
+            values: [['Amount'], ['1,234']],
+          }),
+        })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      await GoogleAPI.cleanUploadedSheet('sheet-id', {
+        removeEmptyRows: false,
+        removeEmptyColumns: false,
+        removeDuplicates: false,
+        trim: false,
+        fixNumbers: true,
+        normalizeHeaders: false,
+      });
+
+      // Expect number update with USER_ENTERED
+      const updateBody = JSON.parse(global.fetch.mock.calls[3][1].body);
+      expect(updateBody.valueInputOption).toBe('USER_ENTERED');
+      expect(updateBody.data).toEqual([
+        { range: "'Sheet1'!A2", values: [[1234]] },
+      ]);
+    });
+
+    test('preserves leading-zero identifier as string', async () => {
+      global.fetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            sheets: [{
+              properties: {
+                sheetId: 0,
+                title: 'Sheet1',
+                gridProperties: { rowCount: 2, columnCount: 1 },
+              },
+            }],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            values: [['Code'], ['00123']],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          // FORMULA read: "00123" is a string with leading zero (postal code, SKU, etc.)
+          json: () => Promise.resolve({
+            values: [['Code'], ['00123']],
+          }),
+        })
+        // No value update expected — "00123" has no commas, so cleaned === val, no change
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) }); // safety
+
+      await GoogleAPI.cleanUploadedSheet('sheet-id', {
+        removeEmptyRows: false,
+        removeEmptyColumns: false,
+        removeDuplicates: false,
+        trim: false,
+        fixNumbers: true,
+        normalizeHeaders: false,
+      });
+
+      // Should be 3 calls (info, FORMATTED_VALUE, FORMULA) — no value update
+      expect(global.fetch.mock.calls.length).toBe(3);
+    });
+
+    test('preserves leading-zero identifier but cleans commas', async () => {
+      global.fetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            sheets: [{
+              properties: {
+                sheetId: 0,
+                title: 'Sheet1',
+                gridProperties: { rowCount: 2, columnCount: 1 },
+              },
+            }],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            values: [['Account'], ['0,012,345']],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          // FORMULA read: string with commas and leading zero
+          json: () => Promise.resolve({
+            values: [['Account'], ['0,012,345']],
+          }),
+        })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      await GoogleAPI.cleanUploadedSheet('sheet-id', {
+        removeEmptyRows: false,
+        removeEmptyColumns: false,
+        removeDuplicates: false,
+        trim: false,
+        fixNumbers: true,
+        normalizeHeaders: false,
+      });
+
+      // Leading-zero identifier → keep as string (RAW), commas removed
+      const updateBody = JSON.parse(global.fetch.mock.calls[3][1].body);
+      expect(updateBody.valueInputOption).toBe('RAW');
+      expect(updateBody.data).toEqual([
+        { range: "'Sheet1'!A2", values: [['0012345']] },
+      ]);
+    });
+
+    test('leaves actual numbers untouched', async () => {
+      global.fetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            sheets: [{
+              properties: {
+                sheetId: 0,
+                title: 'Sheet1',
+                gridProperties: { rowCount: 2, columnCount: 1 },
+              },
+            }],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            values: [['Value'], ['42']],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          // FORMULA read: 42 is already a number
+          json: () => Promise.resolve({
+            values: [['Value'], [42]],
+          }),
+        })
+        // No value update — 42 is already a number, fixNumbers has nothing to do
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) }); // safety
+
+      await GoogleAPI.cleanUploadedSheet('sheet-id', {
+        removeEmptyRows: false,
+        removeEmptyColumns: false,
+        removeDuplicates: false,
+        trim: false,
+        fixNumbers: true,
+        normalizeHeaders: false,
+      });
+
+      expect(global.fetch.mock.calls.length).toBe(3); // no value writes
+    });
+
+    test('leaves date cells untouched', async () => {
+      global.fetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            sheets: [{
+              properties: {
+                sheetId: 0,
+                title: 'Sheet1',
+                gridProperties: { rowCount: 2, columnCount: 1 },
+              },
+            }],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            values: [['Date'], ['2024-01-15']],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          // FORMULA read: date stored as number (serial date), not formula
+          json: () => Promise.resolve({
+            values: [['Date'], [45306]],
+          }),
+        })
+        // No value update — 45306 is a number, not a string, so nothing to fix
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) }); // safety
+
+      await GoogleAPI.cleanUploadedSheet('sheet-id', {
+        removeEmptyRows: false,
+        removeEmptyColumns: false,
+        removeDuplicates: false,
+        trim: false,
+        fixNumbers: true,
+        normalizeHeaders: false,
+      });
+
+      expect(global.fetch.mock.calls.length).toBe(3); // no value writes
+    });
+
+    test('leaves boolean cells untouched', async () => {
+      global.fetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            sheets: [{
+              properties: {
+                sheetId: 0,
+                title: 'Sheet1',
+                gridProperties: { rowCount: 2, columnCount: 1 },
+              },
+            }],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            values: [['Active'], ['TRUE']],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          // FORMULA read: TRUE is a JS boolean
+          json: () => Promise.resolve({
+            values: [['Active'], [true]],
+          }),
+        })
+        // No value update — boolean is not a string, nothing to clean
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) }); // safety
+
+      await GoogleAPI.cleanUploadedSheet('sheet-id', {
+        removeEmptyRows: false,
+        removeEmptyColumns: false,
+        removeDuplicates: false,
+        trim: false,
+        fixNumbers: true,
+        normalizeHeaders: false,
+      });
+
+      expect(global.fetch.mock.calls.length).toBe(3); // no value writes
+    });
+
+    test('normalizes headers but skips formula cells in header row', async () => {
+      global.fetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            sheets: [{
+              properties: {
+                sheetId: 0,
+                title: 'Sheet1',
+                gridProperties: { rowCount: 2, columnCount: 3 },
+              },
+            }],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            values: [
+              ['first name', '=TODAY()', 'eMAIL ADDRESS'],
+              ['Alice', '2024-01-15', 'alice@example.com'],
+            ],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          // FORMULA read: "=TODAY()" is a formula, other two are strings
+          json: () => Promise.resolve({
+            values: [
+              ['first name', '=TODAY()', 'eMAIL ADDRESS'],
+              ['Alice', '2024-01-15', 'alice@example.com'],
+            ],
+          }),
+        })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      await GoogleAPI.cleanUploadedSheet('sheet-id', {
+        removeEmptyRows: false,
+        removeEmptyColumns: false,
+        removeDuplicates: false,
+        trim: false,
+        fixNumbers: false,
+        normalizeHeaders: true,
+      });
+
+      const updateBody = JSON.parse(global.fetch.mock.calls[3][1].body);
+      expect(updateBody.valueInputOption).toBe('RAW');
+      // Only the string headers updated, formula cell skipped
+      expect(updateBody.data).toEqual([
+        { range: "'Sheet1'!A1", values: [['First Name']] },
+        { range: "'Sheet1'!C1", values: [['Email Address']] },
+      ]);
+    });
+
+    test('fixNumbers converts comma-formatted value and trim operates on result, resulting in a single number update', async () => {
+      global.fetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            sheets: [{
+              properties: {
+                sheetId: 0,
+                title: 'Sheet1',
+                gridProperties: { rowCount: 2, columnCount: 1 },
+              },
+            }],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            values: [['Price'], ['  1,234.56  ']],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          // FORMULA read: string value with spaces and commas
+          json: () => Promise.resolve({
+            values: [['Price'], ['  1,234.56  ']],
+          }),
+        })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      await GoogleAPI.cleanUploadedSheet('sheet-id', {
+        removeEmptyRows: false,
+        removeEmptyColumns: false,
+        removeDuplicates: false,
+        trim: true,
+        fixNumbers: true,
+        normalizeHeaders: false,
+      });
+
+      const updateBody = JSON.parse(global.fetch.mock.calls[3][1].body);
+      // After trim ("1,234.56") then fixNumbers removes comma → 1234.56 as number
+      expect(updateBody.valueInputOption).toBe('USER_ENTERED');
+      expect(updateBody.data).toEqual([
+        { range: "'Sheet1'!A2", values: [[1234.56]] },
+      ]);
+    });
+
+    test('trim only updates string cells but not formulas or numbers', async () => {
+      global.fetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            sheets: [{
+              properties: {
+                sheetId: 0,
+                title: 'Sheet1',
+                gridProperties: { rowCount: 3, columnCount: 1 },
+              },
+            }],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            values: [['  Name  '], ['=A1'], ['   text   ']],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          // FORMULA read: "=A1" → formula, "  Name  " and "   text   " → strings
+          json: () => Promise.resolve({
+            values: [['  Name  '], ['=A1'], ['   text   ']],
+          }),
+        })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      await GoogleAPI.cleanUploadedSheet('sheet-id', {
+        removeEmptyRows: false,
+        removeEmptyColumns: false,
+        removeDuplicates: false,
+        trim: true,
+        fixNumbers: false,
+        normalizeHeaders: false,
+      });
+
+      const updateBody = JSON.parse(global.fetch.mock.calls[3][1].body);
+      expect(updateBody.valueInputOption).toBe('RAW');
+      // Only string cells updated; formula cell (=A1) skipped
+      expect(updateBody.data).toEqual([
+        { range: "'Sheet1'!A1", values: [['Name']] },
+        { range: "'Sheet1'!A3", values: [['text']] },
+      ]);
+    });
   });
 
   // ================================================================
