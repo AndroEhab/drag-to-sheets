@@ -1033,7 +1033,7 @@
         const isOpen = !this.cleaningOptions.classList.contains('hidden');
         this.cleaningOptions.classList.toggle('hidden', isOpen);
         this.settingsBtn.classList.toggle('active', !isOpen);
-        this.settingsBtn.setAttribute('aria-pressed', String(!isOpen));
+        this.settingsBtn.setAttribute('aria-expanded', String(!isOpen));
         this.savePreferences();
       });
 
@@ -1496,7 +1496,7 @@
           if (prefs.settingsOpen) {
             this.cleaningOptions.classList.remove('hidden');
             this.settingsBtn.classList.add('active');
-            this.settingsBtn.setAttribute('aria-pressed', 'true');
+            this.settingsBtn.setAttribute('aria-expanded', 'true');
           }
 
           // Smart mapping

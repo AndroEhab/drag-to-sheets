@@ -155,10 +155,14 @@ function setupDOM() {
         <input type="checkbox" id="opt-headers">
       </div>
     </div>
+    <button id="settings-btn" aria-controls="cleaning-options" aria-expanded="false">Settings</button>
     <div id="preview-panel" class="hidden">
       <select id="preview-select"></select>
       <div id="preview-stats"></div>
       <div id="preview-table"></div>
+    </div>
+    <div class="actions">
+      <button id="upload-btn" disabled>Open in Sheets</button>
     </div>
     <div id="loading-panel" class="loading-panel">
       <div class="loading-panel-progress">
@@ -171,8 +175,6 @@ function setupDOM() {
         <span id="loading-sr-alert" class="sr-only" role="alert" aria-live="assertive" aria-atomic="true"></span>
       </div>
     </div>
-    <button id="upload-btn" disabled>Open in Sheets</button>
-    <button id="settings-btn">Settings</button>
     <button id="clear-btn" disabled>Clear</button>
     <button id="url-toggle" aria-expanded="false">Import URL</button>
     <div id="url-bar" class="hidden">
@@ -371,6 +373,85 @@ describe('DragToSheetsApp', () => {
     test('clear button starts disabled', async () => {
       const app = await createApp();
       expect(app.clearBtn.disabled).toBe(true);
+    });
+  });
+
+  // ---- layout and accessibility regression tests ----
+
+  describe('panel layout and disclosure semantics', () => {
+    test('preview precedes upload button in DOM order', async () => {
+      await createApp();
+      const preview = document.getElementById('preview-panel');
+      const upload = document.getElementById('upload-btn');
+      expect(preview.compareDocumentPosition(upload) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    test('settings button has aria-controls pointing to cleaning-options', async () => {
+      await createApp();
+      const btn = document.getElementById('settings-btn');
+      expect(btn.getAttribute('aria-controls')).toBe('cleaning-options');
+    });
+
+    test('settings button starts with aria-expanded false', async () => {
+      await createApp();
+      const btn = document.getElementById('settings-btn');
+      expect(btn.getAttribute('aria-expanded')).toBe('false');
+    });
+
+    test('opening settings sets aria-expanded true', async () => {
+      const app = await createApp();
+      app.settingsBtn.click();
+      expect(app.settingsBtn.getAttribute('aria-expanded')).toBe('true');
+      expect(app.cleaningOptions.classList.contains('hidden')).toBe(false);
+    });
+
+    test('closing settings resets aria-expanded to false', async () => {
+      const app = await createApp();
+      app.settingsBtn.click();
+      expect(app.settingsBtn.getAttribute('aria-expanded')).toBe('true');
+      app.settingsBtn.click();
+      expect(app.settingsBtn.getAttribute('aria-expanded')).toBe('false');
+      expect(app.cleaningOptions.classList.contains('hidden')).toBe(true);
+    });
+
+    test('settings toggle does not fire extra preview refresh or upload', async () => {
+      const app = await createApp();
+      const refreshSpy = jest.spyOn(app, 'schedulePreviewRefresh');
+      const uploadSpy = jest.spyOn(app, 'handleUpload');
+      app.settingsBtn.click();
+      expect(refreshSpy).not.toHaveBeenCalled();
+      expect(uploadSpy).not.toHaveBeenCalled();
+    });
+
+    test('cleaning controls are reachable in natural keyboard order', async () => {
+      await createApp();
+      const settings = document.getElementById('settings-btn');
+      const cleaning = document.getElementById('cleaning-options');
+      const preview = document.getElementById('preview-panel');
+      // Cleaning options are inside options-panel, which precedes settings in DOM
+      const allElements = document.body.querySelectorAll('#options-panel, #settings-btn, #preview-panel');
+      const indices = {};
+      allElements.forEach((el, i) => { indices[el.id] = i; });
+      expect(indices['options-panel']).toBeLessThan(indices['settings-btn']);
+      expect(indices['settings-btn']).toBeLessThan(indices['preview-panel']);
+    });
+
+    test('upload button disabled state matches files length', async () => {
+      const app = await createApp();
+      expect(app.uploadBtn.disabled).toBe(true);
+      app.files = [{ name: 'test.csv' }];
+      app.updateUI();
+      expect(app.uploadBtn.disabled).toBe(false);
+    });
+
+    test('live status regions remain after primary action and retain roles', async () => {
+      await createApp();
+      const upload = document.getElementById('upload-btn');
+      const status = document.getElementById('loading-sr-status');
+      const alert = document.getElementById('loading-sr-alert');
+      expect(upload.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(status.getAttribute('role')).toBe('status');
+      expect(alert.getAttribute('role')).toBe('alert');
     });
   });
 
