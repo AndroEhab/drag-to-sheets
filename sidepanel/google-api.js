@@ -371,9 +371,12 @@ const GoogleAPI = (() => {
       const sheetTitle = gs.properties.title;
       const escapedTitle = escapeSheetName(sheetTitle);
 
-      // ---- Step 1: lightweight values read for used-range bounding ----
+      // ---- Step 1: lightweight FORMULA read for used-range bounding.
+      // FORMULA returns formula text for formula cells (non-empty even
+      // when the calculated result is empty), so formulas always
+      // contribute to used-row / used-column bounds.
       const valuesResult = await apiRequest(
-        `${SHEETS_BASE}/${spreadsheetId}/values/${encodeURIComponent(escapedTitle)}?valueRenderOption=FORMATTED_VALUE`,
+        `${SHEETS_BASE}/${spreadsheetId}/values/${encodeURIComponent(escapedTitle)}?valueRenderOption=FORMULA`,
         {}, context
       );
       const usedValues = valuesResult.values || [];

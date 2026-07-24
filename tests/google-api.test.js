@@ -1359,7 +1359,7 @@ describe('GoogleAPI', () => {
 
       const valuesUrl = global.fetch.mock.calls[1][0];
       expect(valuesUrl).toContain('spreadsheets/sheet-id/values/');
-      expect(valuesUrl).toContain('valueRenderOption=FORMATTED_VALUE');
+      expect(valuesUrl).toContain('valueRenderOption=FORMULA');
 
       const structUrl = global.fetch.mock.calls[2][0];
       expect(structUrl).toContain('spreadsheets/sheet-id?fields=');
@@ -1399,6 +1399,45 @@ describe('GoogleAPI', () => {
 
       const structUrl = global.fetch.mock.calls[2][0];
       expect(structUrl).toContain(encodeURIComponent("'John''s Sheet'!A1:A2"));
+    });
+
+    test('formula returning empty string in trailing column contributes to used bounds', async () => {
+      global.fetch
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(sheetInfo('Sheet1', 2, 2)) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(valuesResp([['Name', '=IF(TRUE,"",)'], ['Alice', '']])) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(gridData([
+          [cellS('Name'), cellF('=IF(TRUE,"",)')],
+          [cellS('Alice'), emptyCell()],
+        ])) });
+
+      await GoogleAPI.cleanUploadedSheet('sheet-id', {
+        removeEmptyRows: false, removeEmptyColumns: true, removeDuplicates: false,
+        trim: false, fixNumbers: false, normalizeHeaders: false,
+      });
+
+      // Only 3 calls: info, FORMULA values, struct CellData — no structural deletes
+      // because the formula column is non-empty
+      expect(global.fetch.mock.calls.length).toBe(3);
+    });
+
+    test('formula returning empty string in trailing row contributes to used bounds', async () => {
+      global.fetch
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(sheetInfo('Sheet1', 3, 1)) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(valuesResp([['Name'], ['Alice'], ['=IF(TRUE,"",)']])) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(gridData([
+          [cellS('Name')],
+          [cellS('Alice')],
+          [cellF('=IF(TRUE,"",)')],
+        ])) });
+
+      await GoogleAPI.cleanUploadedSheet('sheet-id', {
+        removeEmptyRows: true, removeEmptyColumns: false, removeDuplicates: false,
+        trim: false, fixNumbers: false, normalizeHeaders: false,
+      });
+
+      // Only 3 calls: info, FORMULA values, struct CellData — no structural deletes
+      // because the formula row is non-empty
+      expect(global.fetch.mock.calls.length).toBe(3);
     });
 
     test('effective zero-row sheet is skipped', async () => {

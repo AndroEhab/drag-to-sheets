@@ -320,7 +320,7 @@ describe('Parser', () => {
       expect(result.sheets[0].name).toBe('Sheet1');
       expect(result.sheets[0].data).toEqual([
         ['Name', 'Age'],
-        ['Alice', '30'],
+        ['Alice', 30],
       ]);
     });
 
@@ -443,7 +443,7 @@ describe('Parser', () => {
       expect(result.sheets[1].name).toBe('Costs');
     });
 
-    test('normalizes cell values to strings', async () => {
+    test('preserves native cell types where available', async () => {
       global.XLSX.utils.sheet_to_json.mockReturnValue([
         ['Col'],
         [123],
@@ -453,9 +453,12 @@ describe('Parser', () => {
 
       const result = await Parser.parse(makeExcelFile('types.xlsx'));
 
-      expect(result.sheets[0].data[1][0]).toBe('123');
+      // Native types preserved (not stringified)
+      expect(result.sheets[0].data[1][0]).toBe(123);
       expect(result.sheets[0].data[2][0]).toBe('');
-      expect(result.sheets[0].data[3][0]).toBe('true');
+      expect(result.sheets[0].data[3][0]).toBe(true);
+      // cellMeta contains type information
+      expect(result.sheets[0].cellMeta).toBeTruthy();
     });
 
     test('pads rows to consistent column count', async () => {
@@ -495,7 +498,7 @@ describe('Parser', () => {
       expect(global.XLSX.read).toHaveBeenCalled();
       expect(result.sheets[0].data).toEqual([
         ['Name', 'Age'],
-        ['Alice', '30'],
+        ['Alice', 30],
       ]);
     });
   });

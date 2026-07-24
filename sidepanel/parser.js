@@ -423,18 +423,18 @@ const Parser = (() => {
       const sheet = workbook.Sheets[name];
       const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
 
-      // Ensure all rows have consistent column count
       const maxCols = data.reduce((max, row) => Math.max(max, row.length), 0);
-
       const styles = extractSheetStyles(sheet, data.length, maxCols, workbook, sheetIdx);
+      const cellMeta = buildCellMeta(sheet, data.length, maxCols);
 
+      // Preserve native cell types (numbers, booleans, dates)
       const normalized = new Array(data.length);
       for (let ri = 0; ri < data.length; ri++) {
         const src = data[ri];
         const dest = new Array(maxCols);
         const len = Math.min(src.length, maxCols);
         for (let ci = 0; ci < len; ci++) {
-          dest[ci] = src[ci] == null ? '' : String(src[ci]);
+          dest[ci] = src[ci] == null ? '' : src[ci];
         }
         for (let ci = len; ci < maxCols; ci++) {
           dest[ci] = '';
@@ -442,19 +442,104 @@ const Parser = (() => {
         normalized[ri] = dest;
       }
 
-      // Trim trailing empty rows — cellStyles can extend the sheet range
-      // beyond actual data, producing all-empty rows that break merging.
+      // Trim trailing empty rows
       while (normalized.length > 1 && normalized[normalized.length - 1].every((c) => c === '')) {
         normalized.pop();
         if (styles) styles.pop();
+        if (cellMeta) cellMeta.pop();
       }
 
-      const result = { name, data: normalized };
+      const result = { name, data: normalized, cellMeta };
       if (styles) result.styles = styles;
       return result;
     });
 
     return { sheets, themeColors };
+  }
+
+  /**
+   * Build a cell-metadata matrix parallel to the data matrix.
+   * Each entry is a token: { type, value, formula?, formatType? }
+   * Derived from SheetJS cell objects (t, v, f, z).
+   */
+  function buildCellMeta(sheet, rowCount, colCount) {
+    const colLetters = new Array(colCount);
+    for (let ci = 0; ci < colCount; ci++) {
+      let s = '';
+      let n = ci + 1;
+      while (n > 0) { n--; s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26); }
+      colLetters[ci] = s;
+    }
+
+    const meta = new Array(rowCount);
+    for (let ri = 0; ri < rowCount; ri++) {
+      meta[ri] = new Array(colCount);
+      for (let ci = 0; ci < colCount; ci++) {
+        const cell = sheet[colLetters[ci] + (ri + 1)];
+        meta[ri][ci] = tokenFromSheetCell(cell);
+      }
+    }
+    return meta;
+  }
+
+  /**
+   * Derive a cell token from a SheetJS cell object.
+   */
+  function tokenFromSheetCell(cell) {
+    if (!cell) return { type: 'empty' };
+
+    const t = cell.t;
+    const f = cell.f;
+    const v = cell.v;
+    const z = cell.z;
+    const fmtType = classifyNumberFormat(z);
+
+    // Formula cells — preserve formula string
+    if (f !== undefined && f !== null) {
+      return { type: 'formula', value: v, formula: f };
+    }
+
+    // Date/time determined by number format
+    if (fmtType === 'DATE' || fmtType === 'TIME' || fmtType === 'DATE_TIME') {
+      return { type: 'date', value: v, formatType: fmtType };
+    }
+
+    // Boolean
+    if (t === 'b') {
+      return { type: 'boolean', value: Boolean(v) };
+    }
+
+    // Number
+    if (t === 'n') {
+      const tok = { type: 'number', value: v };
+      if (fmtType === 'TEXT') tok.formatType = 'TEXT';
+      return tok;
+    }
+
+    // String or empty
+    if (v === undefined || v === null || v === '') {
+      return { type: 'empty' };
+    }
+    const tok = { type: 'string', value: String(v) };
+    if (fmtType === 'TEXT') tok.formatType = 'TEXT';
+    return tok;
+  }
+
+  /**
+   * Classify a SheetJS number format string (z) into a type.
+   * Detects TEXT (@), date, time, and date-time patterns.
+   */
+  function classifyNumberFormat(z) {
+    if (!z || typeof z !== 'string') return undefined;
+    if (z === '@') return 'TEXT';
+
+    const hasDate = /[dmy]{1,4}/i.test(z);
+    const hasTime = /h{1,2}|s{1,2}/i.test(z);
+
+    if (hasDate && hasTime) return 'DATE_TIME';
+    if (hasDate) return 'DATE';
+    if (hasTime) return 'TIME';
+    return undefined;
   }
 
   /**

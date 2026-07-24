@@ -13,8 +13,8 @@ const Cleaner = (() => {
    * @param {Object} options - Cleaning options
    * @returns {string[][]}
    */
-  function apply(data, options) {
-    if (!data || data.length === 0) return data;
+  function apply(data, options, cellMeta) {
+    if (!data || data.length === 0) return cellMeta ? { data, cellMeta } : data;
 
     const hasWork =
       options.trim ||
@@ -24,32 +24,69 @@ const Cleaner = (() => {
       options.fixNumbers ||
       options.normalizeHeaders;
 
-    if (!hasWork) return data;
+    if (!hasWork) return cellMeta ? { data, cellMeta } : data;
 
     let result = data;
+    let meta = cellMeta ? clone2D(cellMeta) : null;
 
     if (options.trim) {
       result = trimWhitespace(result);
     }
     if (options.removeEmptyRows) {
       result = removeEmptyRows(result);
+      if (meta) meta = filterRowsByData(result, data, meta);
+      data = result; // update reference for subsequent index tracking
     }
     if (options.removeEmptyColumns) {
       result = removeEmptyColumns(result);
+      if (meta) meta = filterColsByData(result, meta);
     }
     if (options.removeDuplicates) {
       result = options.duplicateMode === 'absolute'
         ? removeAbsoluteDuplicates(result)
         : removeDuplicateRows(result);
+      if (meta) meta = filterRowsByData(result, data, meta);
     }
     if (options.fixNumbers) {
-      result = fixNumberFormatting(result);
+      result = fixNumberFormatting(result, meta);
     }
     if (options.normalizeHeaders) {
       result = normalizeHeaders(result);
     }
 
-    return result;
+    return cellMeta ? { data: result, cellMeta: meta } : result;
+  }
+
+  function clone2D(arr) {
+    return arr.map((row) => row.slice());
+  }
+
+  function filterRowsByData(newData, oldData, meta) {
+    if (!meta) return null;
+    const keep = [];
+    for (let i = 0, ni = 0; i < oldData.length; i++) {
+      if (ni < newData.length && rowsEqual(newData[ni], oldData[i])) {
+        keep.push(i);
+        ni++;
+      }
+    }
+    return keep.map((idx) => meta[idx]);
+  }
+
+  function rowsEqual(a, b) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+
+  function filterColsByData(newData, meta) {
+    if (!meta) return null;
+    const colCount = newData[0] ? newData[0].length : 0;
+    return meta.map((row) => {
+      const newRow = new Array(colCount);
+      for (let c = 0; c < colCount; c++) newRow[c] = row ? row[c] || { type: 'empty' } : { type: 'empty' };
+      return newRow;
+    });
   }
 
   /**
@@ -77,7 +114,7 @@ const Cleaner = (() => {
         row.some((cell) => {
           if (cell === null || cell === undefined) return false;
           if (typeof cell === 'string') return cell.trim().length > 0;
-          return true; // numbers, booleans, etc. are non-empty
+          return true;
         })
       ),
     ];
@@ -88,20 +125,16 @@ const Cleaner = (() => {
    */
   function removeEmptyColumns(data) {
     if (data.length === 0) return data;
-
     const colCount = data.reduce((max, r) => Math.max(max, r.length), 0);
     const keepCols = [];
-
     for (let col = 0; col < colCount; col++) {
-      const hasValue = data.some((row) => {
+      if (data.some((row) => {
         const val = row[col];
         if (val === null || val === undefined) return false;
         if (typeof val === 'string') return val.trim().length > 0;
         return true;
-      });
-      if (hasValue) keepCols.push(col);
+      })) keepCols.push(col);
     }
-
     return data.map((row) => keepCols.map((col) => row[col] ?? ''));
   }
 
@@ -127,17 +160,11 @@ const Cleaner = (() => {
     return result;
   }
 
-  /**
-   * Remove duplicate data rows (keeps first occurrence).
-   * Uses token-based comparison via tokenFromValue + rowComparisonKey.
-   */
   function removeDuplicateRows(data) {
     if (data.length <= 1) return data;
-
     const header = data[0];
     const seen = new Set();
     const result = [header];
-
     for (let i = 1; i < data.length; i++) {
       const tokens = data[i].map((v) => tokenFromValue(v));
       const key = rowComparisonKey(tokens, false, []);
@@ -146,7 +173,6 @@ const Cleaner = (() => {
         result.push(data[i]);
       }
     }
-
     return result;
   }
 
@@ -155,20 +181,22 @@ const Cleaner = (() => {
    * Skips the header row. Converts all eligible numeric-looking strings.
    * Preserves leading-zero identifiers (postal codes, SKUs, etc.).
    */
-  function fixNumberFormatting(data) {
+  function fixNumberFormatting(data, meta) {
     if (data.length <= 1) return data;
 
     return data.map((row, rowIndex) => {
-      if (rowIndex === 0) return row; // Preserve headers as-is
-      return row.map((cell) => {
+      if (rowIndex === 0) return row;
+      return row.map((cell, colIndex) => {
         if (typeof cell !== 'string') return cell;
+        // Skip TEXT-formatted cells
+        if (meta && meta[rowIndex] && meta[rowIndex][colIndex] && meta[rowIndex][colIndex].formatType === 'TEXT') return cell;
         const trimmed = cell.trim();
         if (trimmed === '') return cell;
 
         const cleaned = trimmed.replace(/[,\s]/g, '');
         if (/^-?\d+(\.\d+)?$/.test(cleaned)) {
           if (cleaned.length > 1 && cleaned.startsWith('0') && !cleaned.startsWith('0.')) {
-            return cleaned; // Leading-zero identifier — keep as string
+            return cleaned;
           }
           const num = Number(cleaned);
           if (Number.isFinite(num)) return num;
