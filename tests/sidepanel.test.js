@@ -167,6 +167,7 @@ function setupDOM() {
       <div class="loading-panel-body">
         <div id="loading-spinner" class="loading-spinner hidden"></div>
         <span id="loading-text" class="loading-text"></span>
+        <span id="loading-sr-announce" class="sr-only" aria-live="polite" aria-atomic="true"></span>
       </div>
     </div>
     <button id="upload-btn" disabled>Open in Sheets</button>
@@ -1802,6 +1803,85 @@ describe('DragToSheetsApp', () => {
 
       expect(app.loadingPanel.classList.contains('loading-panel--active')).toBe(true);
       expect(app.loadingSpinner.classList.contains('hidden')).toBe(false);
+    });
+
+    describe('accessibility announcements', () => {
+      test('announces loading message via live region', async () => {
+        const app = await createApp();
+        const el = app.loadingSrAnnounce;
+
+        app.setStatus('Parsing files…', 'loading');
+
+        expect(el.getAttribute('aria-live')).toBe('polite');
+        expect(el.textContent).toBe('Parsing files…');
+      });
+
+      test('announces success message via live region', async () => {
+        const app = await createApp();
+        const el = app.loadingSrAnnounce;
+
+        app.setStatus('All files ready', 'success');
+
+        expect(el.getAttribute('aria-live')).toBe('polite');
+        expect(el.textContent).toBe('All files ready');
+      });
+
+      test('announces warning message via live region', async () => {
+        const app = await createApp();
+        const el = app.loadingSrAnnounce;
+
+        app.setStatus('Enter a valid URL', 'warning');
+
+        expect(el.getAttribute('aria-live')).toBe('polite');
+        expect(el.textContent).toBe('Enter a valid URL');
+      });
+
+      test('announces error message with assertive priority', async () => {
+        const app = await createApp();
+        const el = app.loadingSrAnnounce;
+
+        app.setStatus('Upload failed', 'error');
+
+        expect(el.getAttribute('aria-live')).toBe('assertive');
+        expect(el.textContent).toBe('Upload failed');
+      });
+
+      test('does not announce info type messages', async () => {
+        const app = await createApp();
+        const el = app.loadingSrAnnounce;
+
+        app.setStatus('Restored 3 files', 'info');
+
+        expect(el.textContent).toBe('');
+      });
+
+      test('does not re-announce the same error twice', async () => {
+        const app = await createApp();
+        const el = app.loadingSrAnnounce;
+
+        app.setStatus('Upload failed', 'error');
+        expect(el.textContent).toBe('Upload failed');
+
+        el.textContent = '';
+
+        app.setStatus('Upload failed', 'error');
+
+        expect(el.textContent).toBe('');
+      });
+
+      test('re-announces same error after a different status clears it', async () => {
+        const app = await createApp();
+        const el = app.loadingSrAnnounce;
+
+        app.setStatus('Upload failed', 'error');
+        expect(el.textContent).toBe('Upload failed');
+
+        app.setStatus('Ready', 'success');
+        expect(el.textContent).toBe('Ready');
+
+        app.setStatus('Upload failed', 'error');
+        expect(el.textContent).toBe('Upload failed');
+      });
     });
   });
 

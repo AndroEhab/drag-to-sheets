@@ -902,6 +902,7 @@
       this.loadingBar = document.getElementById('loading-panel-bar');
       this.loadingSpinner = document.getElementById('loading-spinner');
       this.loadingText = document.getElementById('loading-text');
+      this.loadingSrAnnounce = document.getElementById('loading-sr-announce');
       this.urlToggle = document.getElementById('url-toggle');
       this.urlBar = document.getElementById('url-bar');
       this.urlInput = document.getElementById('url-input');
@@ -3175,6 +3176,25 @@
         else if (type === 'warning') this.loadingPanel.classList.add('loading-panel--warning');
         else if (type === 'error') this.loadingPanel.classList.add('loading-panel--error');
       }
+
+      this._announceStatus(message, type);
+    }
+
+    _announceStatus(message, type) {
+      // info is used for internal restore messages and the initial hint — skip
+      if (type === 'info') return;
+
+      const el = this.loadingSrAnnounce;
+      if (!el) return;
+
+      // Avoid re-announcing the same error consecutively
+      if (type === 'error' && message === this._lastAnnouncedMessage && this._lastAnnouncedType === 'error') return;
+
+      el.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
+      el.textContent = message;
+
+      this._lastAnnouncedMessage = message;
+      this._lastAnnouncedType = type;
     }
 
     // ---- Helpers ----
